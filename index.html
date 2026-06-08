@@ -17,6 +17,7 @@
   #stage{position:fixed;inset:0}
   canvas#view{position:absolute;inset:0;width:100%;height:100%;touch-action:none;display:block}
   video{display:none}
+  [hidden]{display:none!important}
 
   .topbar{position:absolute;top:0;left:0;right:0;z-index:5;display:flex;align-items:center;
     justify-content:space-between;padding:max(14px,env(safe-area-inset-top)) 16px 12px;
@@ -27,6 +28,7 @@
   .mode{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--dim);
     border:1px solid var(--line);padding:5px 9px;border-radius:2px;text-transform:uppercase}
   .mode.live{color:var(--accent);border-color:var(--accent);box-shadow:0 0 14px -4px var(--accent)}
+  .mode.file{color:var(--accent2);border-color:var(--accent2);box-shadow:0 0 14px -4px var(--accent2)}
   .mode.rec{color:#fff;border-color:var(--warn);background:rgba(255,93,74,.18)}
   .mode.rec::before{content:"●";color:var(--warn);margin-right:5px;animation:blink 1s infinite}
   @keyframes blink{50%{opacity:.25}}
@@ -59,6 +61,15 @@
     font-size:9px;letter-spacing:.18em;color:var(--dim);text-transform:uppercase}
   input[type=range]{flex:1;accent-color:var(--accent);height:22px}
 
+  .transport{display:flex;align-items:center;gap:10px;margin-top:8px}
+  #scrub{flex:1;accent-color:var(--accent);height:22px}
+  .tcode{font-family:var(--mono);font-size:10px;letter-spacing:.1em;color:var(--dim);
+    font-variant-numeric:tabular-nums;min-width:86px;text-align:right}
+  .aprog{display:flex;align-items:center;gap:10px;margin-top:8px;font-family:var(--mono);
+    font-size:9px;letter-spacing:.18em;color:var(--dim);text-transform:uppercase}
+  .abar{flex:1;height:4px;background:rgba(255,255,255,.08);border-radius:2px;overflow:hidden}
+  .abar i{display:block;height:100%;width:0;background:var(--accent);box-shadow:0 0 12px -2px var(--accent);transition:width .12s linear}
+
   .plays{position:absolute;right:14px;top:64px;z-index:6;width:174px;max-height:46vh;overflow:auto;
     background:var(--panel);backdrop-filter:blur(6px);border:1px solid var(--line);border-radius:4px;
     padding:10px;display:none;font-family:var(--mono)}
@@ -68,6 +79,15 @@
   .pl b{color:var(--ink);font-size:15px;font-weight:700}
   .pl span{color:var(--accent2)}
   .plays .empty{font-size:10px;color:var(--dim);letter-spacing:.1em}
+
+  .summary{position:absolute;right:14px;top:64px;z-index:6;width:206px;
+    background:var(--panel);backdrop-filter:blur(6px);border:1px solid var(--line);border-radius:4px;
+    padding:10px;display:none;font-family:var(--mono)}
+  .summary.show{display:block}
+  .summary h4{font-size:9px;letter-spacing:.24em;color:var(--accent);text-transform:uppercase;margin-bottom:8px}
+  .summary .mini{margin-bottom:8px}
+  .spark{width:100%;height:42px;margin-top:4px;display:block}
+  .srange{font-size:9px;letter-spacing:.16em;color:var(--dim);text-transform:uppercase;margin-top:5px;line-height:1.5}
 
   .hint{position:absolute;left:50%;top:54%;transform:translate(-50%,-50%);z-index:7;
     font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-align:center;color:var(--ink);
@@ -80,9 +100,17 @@
   .gate h1{font-family:var(--mono);font-size:36px;letter-spacing:.3em;font-weight:800}
   .gate h1 b{color:var(--accent)}
   .gate p{color:var(--dim);font-size:13px;line-height:1.7;max-width:350px;margin:16px 0 26px;font-family:var(--mono);letter-spacing:.03em}
-  .gate .start{font-family:var(--mono);font-size:14px;letter-spacing:.2em;text-transform:uppercase;
-    background:var(--accent);color:#08130a;font-weight:800;border:0;border-radius:4px;padding:18px 40px;cursor:pointer;box-shadow:0 0 40px -10px var(--accent)}
+  .gate-actions{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+  .gate .start,.gate label.start{font-family:var(--mono);font-size:14px;letter-spacing:.2em;text-transform:uppercase;
+    background:var(--accent);color:#08130a;font-weight:800;border:0;border-radius:4px;padding:18px 34px;cursor:pointer;
+    box-shadow:0 0 40px -10px var(--accent);display:inline-block}
+  .gate .start.alt{background:transparent;color:var(--accent2);border:1px solid var(--accent2);
+    box-shadow:0 0 30px -12px var(--accent2)}
+  .gate .start:active{transform:scale(.97)}
   .gate .start:disabled{opacity:.5}
+  .drop{margin-top:18px;font-family:var(--mono);font-size:10px;letter-spacing:.18em;color:var(--dim);text-transform:uppercase}
+  .gate.drag{outline:2px dashed var(--accent2);outline-offset:-12px}
+  .gate.drag .drop{color:var(--accent2)}
   .gate .status{color:var(--accent2);font-size:11px;margin-top:18px;font-family:var(--mono);letter-spacing:.12em;min-height:16px}
   .gate .err{color:var(--warn);font-size:12px;margin-top:14px;max-width:330px;line-height:1.6;font-family:var(--mono)}
   .scan{position:absolute;inset:0;pointer-events:none;opacity:.5;mix-blend-mode:overlay;
@@ -121,6 +149,20 @@
 
   <div class="plays" id="playsPanel"><h4>Play Log</h4><div id="playList" class="empty">No plays yet</div></div>
 
+  <div class="summary" id="summaryCard">
+    <h4>Clip Summary</h4>
+    <div class="mini">
+      <div class="readout alt"><div class="lbl">Peak</div><span class="val" id="sumPeak">0.0</span></div>
+      <div class="readout alt"><div class="lbl">Avg</div><span class="val" id="sumAvg">0.0</span></div>
+    </div>
+    <div class="mini">
+      <div class="readout"><div class="lbl">Dist m</div><span class="val" id="sumDist">0</span></div>
+      <div class="readout"><div class="lbl">Players</div><span class="val" id="sumPlayers">0</span></div>
+    </div>
+    <canvas id="spark" class="spark"></canvas>
+    <div class="srange">speed over clip · 2D image-plane</div>
+  </div>
+
   <div class="hint" id="hint"></div>
 
   <div class="dock">
@@ -128,29 +170,57 @@
       <button class="btn on" id="mPlayer">Players</button>
       <button class="btn" id="mBall">Ball</button>
     </div>
-    <div class="row">
-      <button class="btn rec" id="bRec">● Rec Play</button>
-      <button class="btn go" id="bCal">Set Scale</button>
+
+    <div id="camDock">
+      <div class="row">
+        <button class="btn rec" id="bRec">● Rec Play</button>
+        <button class="btn go" id="bCal">Set Scale</button>
+      </div>
     </div>
-    <div class="row">
-      <button class="btn on" id="bTrail">Trail</button>
-      <button class="btn" id="bHeat">Heatmap</button>
-      <button class="btn" id="bUnit">KM/H</button>
+
+    <div id="fileDock" hidden>
+      <div class="row">
+        <button class="btn go" id="bAnalyze">Analyze Clip</button>
+        <button class="btn" id="bCalF">Set Scale</button>
+        <button class="btn warn" id="bNewClip">New Clip</button>
+      </div>
+      <div class="transport">
+        <button class="btn" id="bPlay" style="flex:0 0 58px">▶</button>
+        <input type="range" id="scrub" min="0" max="1000" value="0" step="1">
+        <span class="tcode" id="tcode">0:00 / 0:00</span>
+      </div>
+      <div class="aprog" id="aprog" hidden>
+        <span>Analyzing</span>
+        <div class="abar"><i id="abarFill"></i></div>
+        <span id="apct">0%</span>
+      </div>
     </div>
-    <div class="row">
-      <button class="btn" id="bLog">Log</button>
-      <button class="btn warn" id="bReset">Reset</button>
-    </div>
-    <div class="sens"><span>Detect&nbsp;conf</span>
-      <input type="range" id="sens" min="20" max="75" value="42">
+
+    <div id="commonDock">
+      <div class="row">
+        <button class="btn on" id="bTrail">Trail</button>
+        <button class="btn" id="bHeat">Heatmap</button>
+        <button class="btn" id="bUnit">KM/H</button>
+      </div>
+      <div class="row">
+        <button class="btn" id="bLog">Log</button>
+        <button class="btn warn" id="bReset">Reset</button>
+      </div>
+      <div class="sens"><span>Detect&nbsp;conf</span>
+        <input type="range" id="sens" min="20" max="75" value="42">
+      </div>
     </div>
   </div>
 
   <div class="gate" id="gate">
     <div class="scan"></div>
     <h1>ZENITH<b>.</b></h1>
-    <p>AI field tracker. Tap a detected player or the ball to lock on — it follows automatically and reads speed, position, trail and per-play peaks.</p>
-    <button class="start" id="startBtn">Start</button>
+    <p>AI field tracker. Start the live camera, or load a clip to analyze — it locks onto a player or the ball and reads speed, distance, trail and per-play peaks.</p>
+    <div class="gate-actions">
+      <button class="start" id="startBtn">Start Camera</button>
+      <label class="start alt" id="loadBtn">Load Clip<input type="file" id="fileIn" accept="video/*" hidden></label>
+    </div>
+    <div class="drop" id="dropHint">…or drop a video file here</div>
     <div class="status" id="gateStatus"></div>
     <div class="err" id="gateErr"></div>
   </div>
@@ -163,8 +233,12 @@ const video=document.getElementById('cam');
 const cv=document.getElementById('view');
 const ctx=cv.getContext('2d');
 const det=document.createElement('canvas');
-const dctx=det.getContext('2d');
+const dctx=det.getContext('2d',{willReadFrequently:true});
 const DETW=320; let DETH=240;
+// higher-res canvas used only for the offline file-analysis pass (small/fast ball)
+const adet=document.createElement('canvas');
+const actx=adet.getContext('2d',{willReadFrequently:true});
+const AW=640; let AH=360;
 
 let DPR=Math.min(window.devicePixelRatio||1,2);
 let CW=0,CH=0, cover={dx:0,dy:0,dw:0,dh:0};
@@ -172,6 +246,9 @@ let model=null;
 
 const S={
   running:false, mode:'player', conf:0.42,
+  source:'camera', fileURL:null,
+  analyzing:false, analyzePct:0, scrubbing:false,
+  summary:null, speedSeries:[], vSamples:[], maxPersons:0, personCounts:[], fileFps:30,
   target:null, lost:0, searching:false, dets:[],
   calStage:0, calPts:[], ppm:null,
   lastT:0, startT:0, maxV:0, distM:0, smoothV:0, unit:'kmh',
@@ -179,14 +256,21 @@ const S={
   recording:false, peakV:0, playDist:0, playStart:0, plays:[]
 };
 const COCO_CLASS=()=>S.mode==='ball'?'sports ball':'person';
+const unitLabel=()=>({kmh:'KM/H',mph:'MPH',ms:'M/S'}[S.unit]);
+// timebase: a live stream has no media timeline, so wall-clock is correct; a file
+// must be measured against video.currentTime so speed is right even when detection
+// runs slower than realtime (frame-stepped analysis).
+const now=()=>S.source==='file'?video.currentTime*1000:performance.now();
 
 function loadPlays(){try{const j=localStorage.getItem('zenith_plays');if(j)S.plays=JSON.parse(j);}catch(e){}}
 function savePlays(){try{localStorage.setItem('zenith_plays',JSON.stringify(S.plays.slice(0,30)));}catch(e){}}
 
 function resize(){
+  if(S.analyzing)return; // don't reallocate canvases/buffers mid-analysis pass
   CW=Math.round(innerWidth*DPR);CH=Math.round(innerHeight*DPR);
   cv.width=CW;cv.height=CH;
   DETH=Math.round(DETW*CH/CW);det.width=DETW;det.height=DETH;
+  AH=Math.round(AW*CH/CW);adet.width=AW;adet.height=AH;
   S.HY=Math.round(S.HX*CH/CW);S.heat=new Float32Array(S.HX*S.HY);
   computeCover();
 }
@@ -197,20 +281,21 @@ function computeCover(){
 }
 addEventListener('resize',resize);
 
+/* ============================ CAMERA BOOT (unchanged path) ============================ */
 document.getElementById('startBtn').onclick=boot;
 async function boot(){
   const btn=document.getElementById('startBtn'),st=document.getElementById('gateStatus'),er=document.getElementById('gateErr');
-  er.textContent='';btn.disabled=true;
+  er.textContent='';btn.disabled=true;revokeURL();
   try{
     st.innerHTML='<span class="spin"></span>Requesting camera…';
     const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});
-    video.srcObject=stream;await video.play();
+    video.srcObject=stream;video.removeAttribute('src');await video.play();
     await new Promise(r=>{video.videoWidth?r():video.onloadedmetadata=r;});
     resize();
     st.innerHTML='<span class="spin"></span>Loading vision model… (first load downloads ~6MB)';
-    model=await cocoSsd.load({base:'lite_mobilenet_v2'});
+    model=model||await cocoSsd.load({base:'lite_mobilenet_v2'});
     document.getElementById('gate').style.display='none';
-    S.running=true;loadPlays();renderPlays();
+    S.source='camera';S.running=true;loadPlays();renderPlays();setSourceUI('camera');
     flash('Tap a detected <span class="k">'+(S.mode==='ball'?'ball':'player')+'</span> to lock on',2800);
     requestAnimationFrame(loop);detectLoop();
   }catch(e){
@@ -219,9 +304,67 @@ async function boot(){
   }
 }
 
+/* ============================ FILE BOOT ============================ */
+function revokeURL(){if(S.fileURL){try{URL.revokeObjectURL(S.fileURL);}catch(e){}S.fileURL=null;}}
+async function bootFile(file){
+  const btn=document.getElementById('startBtn'),st=document.getElementById('gateStatus'),er=document.getElementById('gateErr');
+  er.textContent='';btn.disabled=true;document.getElementById('loadBtn').style.pointerEvents='none';
+  try{
+    revokeURL();
+    S.fileURL=URL.createObjectURL(file);
+    video.srcObject=null;video.loop=false;video.muted=true;video.src=S.fileURL;
+    st.innerHTML='<span class="spin"></span>Loading clip…';
+    try{await video.play();}catch(e){}
+    // reject (instead of hanging) if the browser can't decode the file — e.g.
+    // iPhone HEVC .mov on Firefox, where 'error' fires and metadata never does.
+    await new Promise((res,rej)=>{
+      if(video.videoWidth)return res();
+      video.onloadedmetadata=()=>res();
+      video.onerror=()=>rej(new Error('decode'));
+      setTimeout(()=>rej(new Error('timeout')),9000);
+    });
+    video.onerror=null;video.onloadedmetadata=null;
+    video.pause();
+    await ensureDuration();try{video.currentTime=0;}catch(e){}
+    resize();
+    if(!model){st.innerHTML='<span class="spin"></span>Loading vision model… (first load downloads ~6MB)';
+      model=await cocoSsd.load({base:'lite_mobilenet_v2'});}
+    document.getElementById('gate').style.display='none';
+    S.source='file';S.running=true;loadPlays();renderPlays();
+    setSourceUI('file');bindTransport();setMode('FILE');
+    flash('Scrub the clip or hit <span class="k">Analyze</span>.\nSet Scale first for real speeds · reads image-plane (2D) — film side-on for the truest number',4200);
+    requestAnimationFrame(loop);detectLoop();
+  }catch(e){
+    btn.disabled=false;document.getElementById('loadBtn').style.pointerEvents='';st.textContent='';
+    const m=(e&&(e.message||e.name))||'';
+    er.textContent=(m==='decode'||m==='timeout')
+      ? "This browser can't decode that video. iPhone HEVC/.mov plays in Safari — on Chrome/Firefox, re-export or AirDrop it as an H.264 MP4."
+      : 'Could not load clip: '+m+'. Try an MP4/MOV/WebM file.';
+  }
+}
+document.getElementById('fileIn').onchange=e=>{const f=e.target.files&&e.target.files[0];if(f)bootFile(f);e.target.value='';};
+(function(){
+  const gate=document.getElementById('gate');
+  gate.addEventListener('dragover',e=>{e.preventDefault();gate.classList.add('drag');});
+  gate.addEventListener('dragleave',()=>gate.classList.remove('drag'));
+  gate.addEventListener('drop',e=>{e.preventDefault();gate.classList.remove('drag');
+    const f=[...(e.dataTransfer.files||[])].find(f=>f.type.startsWith('video/'));if(f)bootFile(f);});
+})();
+
+function setSourceUI(src){
+  document.getElementById('camDock').hidden=src!=='camera';
+  document.getElementById('fileDock').hidden=src!=='file';
+  if(src!=='camera'){S.recording=false;document.getElementById('recTag').style.display='none';
+    document.getElementById('bRec').classList.remove('on');document.getElementById('bRec').textContent='● Rec Play';}
+  document.getElementById('playsPanel').classList.toggle('show',false);
+}
+
+/* ============================ LIVE DETECT LOOP ============================ */
 async function detectLoop(){
   while(S.running){
+    if(S.analyzing){await new Promise(r=>setTimeout(r,80));continue;}
     if(model&&video.readyState>=2){
+      const tCap=now(); // timestamp of THIS frame, before inference advances currentTime
       dctx.drawImage(video,cover.dx*DETW/CW,cover.dy*DETH/CH,cover.dw*DETW/CW,cover.dh*DETH/CH);
       let preds=[];
       try{preds=await model.detect(det,20,S.conf);}catch(e){}
@@ -230,7 +373,8 @@ async function detectLoop(){
         const sx=CW/DETW,sy=CH/DETH,w=p.bbox[2]*sx,h=p.bbox[3]*sy;
         return {x:p.bbox[0]*sx+w/2,y:p.bbox[1]*sy+h/2,w,h,score:p.score};
       });
-      associate(performance.now());
+      associate(tCap);
+      if(S.source==='file'&&video.paused)await new Promise(r=>setTimeout(r,200));
     }else await new Promise(r=>setTimeout(r,60));
   }
 }
@@ -252,9 +396,13 @@ function associate(t){
 function measure(t,prev,cur){
   if(S.lastT){
     const dt=(t-S.lastT)/1000;
-    if(dt>0&&dt<1&&S.ppm){
-      const m=Math.hypot(cur.x-prev.x,cur.y-prev.y)/S.ppm,v=m/dt;
+    const dpx=Math.hypot(cur.x-prev.x,cur.y-prev.y);
+    // outlier gate: a real target can't cross ~half the frame in one inter-frame gap.
+    // drops target-swap spikes so a single bad detection never inflates peak.
+    if(dt>0&&dt<1&&S.ppm&&dpx<0.45*CW){
+      const m=dpx/S.ppm,v=m/dt;
       S.smoothV=S.smoothV*0.65+v*0.35;
+      S.vSamples.push(v);if(S.vSamples.length>4000)S.vSamples.shift(); // raw, for robust peak
       if(v>0.05){S.distM+=m;if(S.recording)S.playDist+=m;}
       if(S.smoothV>S.maxV)S.maxV=S.smoothV;
       if(S.recording&&S.smoothV>S.peakV)S.peakV=S.smoothV;
@@ -271,15 +419,319 @@ function updateHUD(t){
   spd.textContent=conv(S.smoothV).toFixed(1);peak.textContent=conv(S.peakV).toFixed(1);
   mx.textContent=conv(S.maxV).toFixed(1);
   dist.textContent=S.distM<10?S.distM.toFixed(1):Math.round(S.distM);
-  clk.textContent=((t-(S.startT||t))/1000).toFixed(1);
+  clk.textContent=(S.source==='file'?video.currentTime:(t-(S.startT||t))/1000).toFixed(1);
 }
 
+/* ============================ OFFLINE ANALYSIS PASS ============================ */
+function resetTrajectory(){
+  S.target=null;S.searching=false;S.maxV=0;S.distM=0;S.smoothV=0;S.peakV=0;S.lastT=0;S.startT=0;
+  S.trail=[];S.vSamples=[];if(S.heat)S.heat.fill(0);
+}
+// Step to time t and resolve once the decoded frame is ready to draw. The <video>
+// is display:none (we draw to canvas, not composite it), so requestVideoFrameCallback
+// can't be relied on — instead we wait for 'seeked' then settle two animation frames
+// to give the decoder time to present, reducing iOS Safari stale-frame sampling.
+// video.currentTime (the landed time) is the authoritative clock for dt.
+function seekTo(t){
+  return new Promise(res=>{
+    let done=false,timer=null;
+    const finish=()=>{if(done)return;done=true;clearTimeout(timer);video.removeEventListener('seeked',onSeeked);
+      requestAnimationFrame(()=>requestAnimationFrame(()=>res(video.currentTime)));};
+    const onSeeked=()=>finish();
+    video.addEventListener('seeked',onSeeked);
+    const d=isFinite(video.duration)?video.duration:t;
+    try{video.currentTime=Math.min(t,d);}catch(e){res(video.currentTime);}
+    timer=setTimeout(finish,1200); // safety: never hang on a stalled seek
+  });
+}
+// MediaRecorder / streamed clips report duration=Infinity until coaxed; seek far
+// past the end so the browser resolves the real length, then return to 0.
+function ensureDuration(){
+  return new Promise(res=>{
+    if(isFinite(video.duration)&&video.duration>0)return res(video.duration);
+    let done=false;
+    const fin=()=>{if(done)return;done=true;video.removeEventListener('durationchange',ch);
+      try{video.currentTime=0;}catch(e){}res(isFinite(video.duration)?video.duration:0);};
+    const ch=()=>{if(isFinite(video.duration)&&video.duration>0)fin();};
+    video.addEventListener('durationchange',ch);
+    try{video.currentTime=1e101;}catch(e){}
+    setTimeout(fin,2000);
+  });
+}
+function mapPreds(preds,want){
+  const sx=CW/AW,sy=CH/AH;
+  S.dets=preds.filter(p=>p.class===want).map(p=>{
+    const w=p.bbox[2]*sx,h=p.bbox[3]*sy;
+    return {x:p.bbox[0]*sx+w/2,y:p.bbox[1]*sy+h/2,w,h,score:p.score};
+  });
+}
+// Count distinct people per frame at a FIXED confidence (independent of the slider),
+// de-duplicating overlapping boxes with greedy IoU-NMS so duplicate/partial boxes
+// don't inflate the headline. Per-frame counts are kept for a robust median later.
+function countPersons(preds){
+  const ps=preds.filter(p=>p.class==='person'&&p.score>=0.5).sort((a,b)=>b.score-a.score),kept=[];
+  for(const p of ps){
+    const [x,y,w,h]=p.bbox;let dup=false;
+    for(const k of kept){
+      const [X,Y,W2,H2]=k.bbox;
+      const ix=Math.max(0,Math.min(x+w,X+W2)-Math.max(x,X)),iy=Math.max(0,Math.min(y+h,Y+H2)-Math.max(y,Y));
+      const inter=ix*iy,uni=w*h+W2*H2-inter;
+      if(uni>0&&inter/uni>0.5){dup=true;break;}
+    }
+    if(!dup)kept.push(p);
+  }
+  S.personCounts.push(kept.length);
+  if(kept.length>S.maxPersons)S.maxPersons=kept.length;
+}
+function median(arr){if(!arr.length)return 0;const a=[...arr].sort((p,q)=>p-q);return a[a.length>>1];}
+// robust peak: 3-sample median filter kills 1-2 frame detection spikes, then take the
+// max of the filtered series — captures a real multi-frame sprint without latching noise.
+function robustPeak(arr){
+  if(!arr.length)return 0;if(arr.length<3)return Math.max(0,...arr);
+  let mx=0;
+  for(let i=0;i<arr.length;i++){
+    const a=arr[Math.max(0,i-1)],b=arr[i],c=arr[Math.min(arr.length-1,i+1)];
+    const m=[a,b,c].sort((p,q)=>p-q)[1];if(m>mx)mx=m;
+  }
+  return mx;
+}
+
+async function analyzePass(){
+  if(S.analyzing)return;
+  if(!model){flash('Model still loading…',1500);return;}
+  if(!S.ppm)flash('No scale set — showing raw motion. Tap <span class="k">Set Scale</span> for real speed',2600);
+  S.analyzing=true;
+  document.getElementById('bAnalyze').classList.add('on');
+  document.getElementById('aprog').hidden=false;
+  const keep=(S.mode==='player'&&S.target)?{...S.target}:null;
+  resetTrajectory();if(keep)S.target=keep;
+  resetBallTracker();S.maxPersons=0;S.personCounts=[];S.speedSeries=[];
+  document.getElementById('summaryCard').classList.remove('show');
+  video.pause();
+  const d=isFinite(video.duration)&&video.duration>0?video.duration:await ensureDuration();
+  if(!d){S.analyzing=false;document.getElementById('bAnalyze').classList.remove('on');
+    document.getElementById('aprog').hidden=true;flash('Could not read clip length',2000);return;}
+  // sample cadence is decoupled from source fps: dt comes from each frame's real
+  // media time, so a coarser step stays accurate while cutting seeks (fast on iOS).
+  const step=1/(S.mode==='ball'?16:10);
+  for(let t=0;t<=d+1e-3&&S.analyzing;t+=step){
+    const mt=await seekTo(t);
+    if(!S.analyzing)break; // aborted (New Clip / mode switch) mid-seek
+    if(video.readyState>=2){
+      const mtMs=mt*1000;
+      actx.drawImage(video,cover.dx*AW/CW,cover.dy*AH/CH,cover.dw*AW/CW,cover.dh*AH/CH);
+      if(S.mode==='ball'){
+        await ballAnalyzeFrame(mtMs);
+      }else{
+        let preds=[];try{preds=await model.detect(adet,20,S.conf);}catch(e){}
+        countPersons(preds);mapPreds(preds,'person');
+        if(!S.target&&S.dets.length){const top=S.dets.reduce((a,b)=>b.score>a.score?b:a);
+          S.target={x:top.x,y:top.y,w:top.w,h:top.h};S.lastT=0;}
+        associate(mtMs);
+      }
+      S.speedSeries.push(S.smoothV);if(S.speedSeries.length>1500)S.speedSeries.shift();
+    }
+    S.analyzePct=d?Math.min(1,t/d):1;updateProgress();
+    await new Promise(r=>setTimeout(r,0)); // yield so UI/cancel stays responsive
+  }
+  document.getElementById('bAnalyze').classList.remove('on');
+  document.getElementById('aprog').hidden=true;
+  if(S.analyzing){
+    buildSummary();
+    try{video.currentTime=0;}catch(e){}
+    flash('Analysis complete · peak <span class="k">'+conv(S.summary.peakMs).toFixed(1)+'</span> '+unitLabel(),2800);
+  }
+  S.analyzing=false;
+}
+function updateProgress(){
+  document.getElementById('abarFill').style.width=(S.analyzePct*100|0)+'%';
+  document.getElementById('apct').textContent=(S.analyzePct*100|0)+'%';
+}
+function buildSummary(){
+  const ser=S.speedSeries.filter(v=>v>0.5);
+  const avg=ser.length?ser.reduce((a,b)=>a+b,0)/ser.length:0;
+  S.summary={peakMs:robustPeak(S.vSamples),avgMs:avg,dist:S.distM,players:median(S.personCounts)};
+  renderSummary();drawSparkline();
+}
+function renderSummary(){
+  if(!S.summary)return;
+  document.getElementById('sumPeak').textContent=conv(S.summary.peakMs).toFixed(1);
+  document.getElementById('sumAvg').textContent=conv(S.summary.avgMs).toFixed(1);
+  document.getElementById('sumDist').textContent=S.summary.dist<10?S.summary.dist.toFixed(1):Math.round(S.summary.dist);
+  document.getElementById('sumPlayers').textContent=S.summary.players;
+  document.getElementById('summaryCard').classList.add('show');
+}
+function drawSparkline(){
+  const c=document.getElementById('spark'),x=c.getContext('2d');
+  const W=c.width=c.clientWidth*DPR,H=c.height=c.clientHeight*DPR;
+  x.clearRect(0,0,W,H);
+  const s=S.speedSeries;if(s.length<2)return;
+  const mx=Math.max(...s)||1;
+  const X=i=>(i/(s.length-1))*W,Y=v=>H-(v/mx)*(H*0.86)-2;
+  x.beginPath();x.moveTo(0,H);for(let i=0;i<s.length;i++)x.lineTo(X(i),Y(s[i]));x.lineTo(W,H);x.closePath();
+  x.fillStyle='rgba(200,255,50,.12)';x.fill();
+  x.beginPath();for(let i=0;i<s.length;i++){const px=X(i),py=Y(s[i]);i?x.lineTo(px,py):x.moveTo(px,py);}
+  x.lineWidth=2*DPR;x.strokeStyle='#c8ff32';x.stroke();
+}
+
+/* ----- motion-assisted ball tracking (file analysis only) ----- */
+const DIFF_T=22,FRAMEDIFF_T=18,BG_ALPHA=0.05;
+// gates kept permissive on purpose: a fast/blurred ball's frame-diff signature is a
+// thin low-fill crescent or streak (high aspect, large bbox), so tight fill/aspect/size
+// caps would drop exactly the fast balls we care about. A whole moving player is now a
+// single oversized blob (connectedComponents discards it), so the body-fragment risk is
+// already handled upstream — recall is the right call here.
+const BLOB_MIN_PX=4,BLOB_MAX_PX=900,BLOB_MIN_W=2,BLOB_MAX_W=70,BLOB_MAX_AR=6,FILL_MIN=0.30;
+const SPEED_MIN=5,COAST_MAX=8,GATE_BASE=36,GATE_VEL_K=1.4;
+let ballBg=null,ballPrev=null,trk=null,seedCache=null,ballFrame=0;
+function resetBallTracker(){ballBg=null;ballPrev=null;trk=null;seedCache=null;ballFrame=0;}
+function toGray(data){
+  const n=data.length>>2,g=new Float32Array(n);
+  for(let i=0,j=0;i<n;i++,j+=4)g[i]=0.299*data[j]+0.587*data[j+1]+0.114*data[j+2];
+  return g;
+}
+function connectedComponents(mask,W,H){
+  const seen=new Uint8Array(W*H),blobs=[],stack=[];
+  const CAP=BLOB_MAX_PX+1; // anything bigger than a ball is discarded, not pushed
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const i=y*W+x;if(!mask[i]||seen[i])continue;
+    let minx=x,maxx=x,miny=y,maxy=y,area=0,sx=0,sy=0,oversize=false;
+    stack.length=0;stack.push(i);seen[i]=1;
+    // flood the WHOLE region to completion (each pixel marked once → O(W*H) total);
+    // once it exceeds ball size, stop accumulating stats but keep consuming so the
+    // raster scan can't re-enter and fragment a big blob into spurious ball candidates.
+    while(stack.length){
+      const p=stack.pop(),py=(p/W)|0,px=p-py*W;
+      area++;
+      if(area<=CAP){sx+=px;sy+=py;
+        if(px<minx)minx=px;if(px>maxx)maxx=px;if(py<miny)miny=py;if(py>maxy)maxy=py;}
+      else oversize=true;
+      for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+        if(!dx&&!dy)continue;const nx=px+dx,ny=py+dy;
+        if(nx<0||ny<0||nx>=W||ny>=H)continue;
+        const ni=ny*W+nx;if(mask[ni]&&!seen[ni]){seen[ni]=1;stack.push(ni);}
+      }
+    }
+    if(!oversize)blobs.push({x:minx,y:miny,w:maxx-minx+1,h:maxy-miny+1,area,cx:sx/area,cy:sy/area});
+    if(blobs.length>500)return blobs;
+  }
+  return blobs;
+}
+async function ballAnalyzeFrame(mtMs){
+  const img=actx.getImageData(0,0,AW,AH).data;
+  const gray=toGray(img);
+  if(ballBg&&ballBg.length!==gray.length)resetBallTracker(); // geometry changed mid-pass → reseed
+  let preds=null;
+  if(ballFrame%3===0){try{preds=await model.detect(adet,20,0.2);}catch(e){preds=[];}}
+  ballFrame++;
+  if(preds)countPersons(preds);
+  if(!ballBg){ballBg=gray.slice();ballPrev=gray;S.dets=[];return;}
+  const mask=new Uint8Array(AW*AH);
+  for(let i=0;i<gray.length;i++){
+    if(Math.abs(gray[i]-ballBg[i])>DIFF_T&&Math.abs(gray[i]-ballPrev[i])>FRAMEDIFF_T)mask[i]=1;
+  }
+  const blobs=connectedComponents(mask,AW,AH),cand=[];
+  for(const b of blobs){
+    if(b.area<BLOB_MIN_PX||b.area>BLOB_MAX_PX)continue;
+    if(b.w<BLOB_MIN_W||b.h<BLOB_MIN_W||b.w>BLOB_MAX_W||b.h>BLOB_MAX_W)continue;
+    if(Math.max(b.w/b.h,b.h/b.w)>BLOB_MAX_AR)continue;
+    const fill=b.area/(b.w*b.h);if(fill<FILL_MIN)continue;
+    cand.push({cx:b.cx,cy:b.cy,w:b.w,h:b.h,kind:'motion',score:0.4+0.3*fill});
+  }
+  if(preds)for(const p of preds){
+    if(p.class!=='sports ball')continue;
+    const w=p.bbox[2],h=p.bbox[3];
+    cand.push({cx:p.bbox[0]+w/2,cy:p.bbox[1]+h/2,w,h,kind:'model',score:0.7+0.3*p.score});
+  }
+  if(trk){
+    const px=trk.x+trk.vx,py=trk.y+trk.vy,speed=Math.hypot(trk.vx,trk.vy),gate=GATE_BASE+speed*GATE_VEL_K;
+    let best=null,bs=-1;
+    for(const c of cand){
+      const dpred=Math.hypot(c.cx-px,c.cy-py);if(dpred>gate)continue;
+      let s=c.score+0.4*(1-dpred/gate);
+      if(c.kind==='model')s+=0.5;
+      if(Math.hypot(c.cx-trk.x,c.cy-trk.y)>=SPEED_MIN)s+=0.2;
+      if(s>bs){bs=s;best=c;}
+    }
+    if(best){
+      const A=0.7,B=0.4,rx=best.cx-px,ry=best.cy-py;
+      trk.x=px+A*rx;trk.y=py+A*ry;trk.vx+=B*rx;trk.vy+=B*ry;
+      trk.w=best.w||trk.w;trk.h=best.h||trk.h;trk.coast=0;trk.conf=Math.min(1,trk.conf+0.2);
+    }else{trk.x=px;trk.y=py;trk.coast++;trk.conf*=0.7;if(trk.coast>COAST_MAX)trk=null;}
+  }else seedBall(cand);
+  if(trk){
+    const sx=CW/AW,sy=CH/AH;
+    const pt={x:trk.x*sx,y:trk.y*sy,w:Math.max(10,trk.w)*sx,h:Math.max(10,trk.h)*sy,score:trk.conf};
+    S.dets=[pt];
+    if(!S.target){S.target={x:pt.x,y:pt.y,w:pt.w,h:pt.h};S.lastT=0;}
+    associate(mtMs);
+  }else{S.dets=[];if(++S.lost>14)S.searching=true;}
+  for(let i=0;i<gray.length;i++)ballBg[i]+=BG_ALPHA*(gray[i]-ballBg[i]);
+  ballPrev=gray;
+}
+function seedBall(cand){
+  const m=cand.find(c=>c.kind==='model');
+  if(m){
+    // a model 'sports ball' is a high-precision anchor (COCO rarely false-fires it):
+    // seed on it directly, snapping to a nearby motion blob for a tighter centre if one exists.
+    const mo=cand.filter(c=>c.kind==='motion').sort((a,b)=>Math.hypot(a.cx-m.cx,a.cy-m.cy)-Math.hypot(b.cx-m.cx,b.cy-m.cy))[0];
+    const u=(mo&&Math.hypot(mo.cx-m.cx,mo.cy-m.cy)<24)?mo:m;
+    trk={x:u.cx,y:u.cy,vx:0,vy:0,w:u.w,h:u.h,conf:0.6,coast:0};seedCache=null;return;
+  }
+  const fast=cand.filter(c=>c.kind==='motion').sort((a,b)=>b.score-a.score)[0];
+  if(!fast){seedCache=null;return;}
+  if(seedCache){
+    const dx=fast.cx-seedCache.cx,dy=fast.cy-seedCache.cy,d=Math.hypot(dx,dy);
+    if(d>=SPEED_MIN&&d<120){trk={x:fast.cx,y:fast.cy,vx:dx,vy:dy,w:fast.w,h:fast.h,conf:0.5,coast:0};seedCache=null;return;}
+  }
+  seedCache={cx:fast.cx,cy:fast.cy};
+}
+
+/* ============================ TRANSPORT (file mode) ============================ */
+function fmt(s){if(!isFinite(s))s=0;s=Math.max(0,s||0);return (s/60|0)+':'+String((s%60|0)).padStart(2,'0');}
+let transportBound=false;
+function bindTransport(){
+  if(transportBound)return;transportBound=true;
+  const bPlay=document.getElementById('bPlay'),scrub=document.getElementById('scrub');
+  bPlay.onclick=()=>{
+    if(S.analyzing)return;
+    if(video.paused){S.lastT=0;video.play().catch(()=>{});bPlay.textContent='❚❚';}
+    else{video.pause();bPlay.textContent='▶';}
+  };
+  const start=()=>S.scrubbing=true,end=()=>S.scrubbing=false;
+  scrub.addEventListener('pointerdown',start);
+  scrub.addEventListener('pointerup',end);
+  scrub.addEventListener('pointercancel',end);
+  scrub.oninput=()=>{const d=video.duration||0;try{video.currentTime=(scrub.value/1000)*d;}catch(e){}S.lastT=0;};
+  video.onended=()=>{bPlay.textContent='▶';};
+}
+function newClip(){
+  S.analyzing=false;video.pause();revokeURL();
+  try{video.removeAttribute('src');video.load();}catch(e){}
+  resetTrajectory();resetBallTracker();S.speedSeries=[];S.summary=null;S.maxPersons=0;S.lost=0;
+  document.getElementById('summaryCard').classList.remove('show');
+  document.getElementById('aprog').hidden=true;document.getElementById('bAnalyze').classList.remove('on');
+  document.getElementById('bPlay').textContent='▶';
+  spd.textContent='0.0';peak.textContent='0.0';mx.textContent='0.0';dist.textContent='0';clk.textContent='0.0';
+  S.source='camera';S.running=false;setSourceUI('camera');
+  document.getElementById('gate').style.display='';
+  document.getElementById('startBtn').disabled=false;document.getElementById('loadBtn').style.pointerEvents='';
+  document.getElementById('gateStatus').textContent='';document.getElementById('gateErr').textContent='';
+  setMode('STANDBY');
+}
+
+/* ============================ RENDER LOOP ============================ */
 function loop(){
   if(!S.running)return;
   if(video.readyState>=2)ctx.drawImage(video,cover.dx,cover.dy,cover.dw,cover.dh);
   if(S.showHeat)drawHeat();
   if(S.showTrail)drawTrail();
   if(S.calStage>0)drawCal();else{drawCandidates();drawTarget();}
+  if(S.source==='file'&&!S.scrubbing){
+    const d=isFinite(video.duration)&&video.duration>0?video.duration:0;
+    document.getElementById('scrub').value=d?(video.currentTime/d*1000)|0:0;
+    document.getElementById('tcode').textContent=fmt(video.currentTime)+' / '+fmt(d);
+  }
   requestAnimationFrame(loop);
 }
 function drawCandidates(){
@@ -331,6 +783,7 @@ function drawCal(){
   ctx.restore();
 }
 
+/* ============================ POINTER / CONTROLS ============================ */
 cv.addEventListener('pointerdown',e=>{
   if(!S.running)return;
   const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)*DPR,y=(e.clientY-r.top)*DPR;
@@ -343,14 +796,18 @@ cv.addEventListener('pointerdown',e=>{
   if(pick&&bd<0.3*CW)S.target={x:pick.x,y:pick.y,w:pick.w,h:pick.h};
   else S.target={x,y,w:0.12*CW,h:0.26*CH};
   S.lost=0;S.searching=false;S.lastT=0;S.startT=0;
-  setMode('LIVE');flash('Locked'+(S.ppm?'':' — tap <span class="k">Set Scale</span> for real speed'),1800);
+  setMode(S.source==='file'?'FILE':'LIVE');
+  flash('Locked'+(S.ppm?'':' — tap <span class="k">Set Scale</span> for real speed'),1800);
 });
 
-document.getElementById('bCal').onclick=function(){
+function startCal(){
   if(!S.running){flash('Start first',1200);return;}
-  S.calStage=1;S.calPts=[];this.classList.add('on');
+  S.calStage=1;S.calPts=[];
+  document.getElementById('bCal').classList.add('on');document.getElementById('bCalF').classList.add('on');
   flash('Tap two points a <span class="k">known distance</span> apart\n(court width, penalty box, a 5 m line)',3000);
-};
+}
+document.getElementById('bCal').onclick=startCal;
+document.getElementById('bCalF').onclick=startCal;
 function calTap(x,y){
   S.calPts.push({x,y});
   if(S.calPts.length===2){
@@ -358,13 +815,17 @@ function calTap(x,y){
     setTimeout(()=>{
       const m=parseFloat(prompt('Distance between the two points, in meters?','5'));
       if(m>0){S.ppm=dpx/m;flash('Scale set · '+(dpx/m).toFixed(0)+' px/m',1800);}else flash('Cancelled',1200);
-      S.calStage=0;S.calPts=[];document.getElementById('bCal').classList.remove('on');
+      S.calStage=0;S.calPts=[];
+      document.getElementById('bCal').classList.remove('on');document.getElementById('bCalF').classList.remove('on');
     },40);
   }else flash('Now tap the <span class="k">2nd</span> point',1400);
 }
 
+document.getElementById('bAnalyze').onclick=analyzePass;
+document.getElementById('bNewClip').onclick=newClip;
+
 document.getElementById('bRec').onclick=function(){
-  if(!S.running)return;
+  if(!S.running||S.source==='file')return;
   if(!S.recording){
     if(!S.ppm)flash('Set scale first for real speeds',1600);
     S.recording=true;S.peakV=0;S.playDist=0;S.playStart=performance.now();
@@ -387,11 +848,13 @@ function renderPlays(){
   el.innerHTML=S.plays.slice(0,8).map((p,i)=>`<div class="pl">#${S.plays.length-i} &nbsp;<b>${conv(p.peak).toFixed(1)}</b> ${S.unit}<br><span>${p.dist.toFixed(1)} m</span> · ${p.dur.toFixed(1)} s · avg ${conv(p.dist/p.dur).toFixed(1)}</div>`).join('');
 }
 
-function setMode(t){const e=document.getElementById('modeTag');e.textContent=t;e.classList.toggle('live',t==='LIVE');}
+function setMode(t){const e=document.getElementById('modeTag');e.textContent=t;
+  e.classList.toggle('live',t==='LIVE');e.classList.toggle('file',t==='FILE');}
 function pickMode(m){
-  S.mode=m;S.target=null;S.searching=false;S.dets=[];
+  if(S.analyzing){S.analyzing=false;document.getElementById('bAnalyze').classList.remove('on');document.getElementById('aprog').hidden=true;}
+  S.mode=m;S.target=null;S.searching=false;S.dets=[];S.lost=0;resetBallTracker();
   mPlayer.classList.toggle('on',m==='player');mBall.classList.toggle('on',m==='ball');
-  if(S.running){setMode('STANDBY');flash('Tap the <span class="k">'+(m==='ball'?'ball':'player')+'</span> to lock on',1800);}
+  if(S.running){setMode(S.source==='file'?'FILE':'STANDBY');flash('Tap the <span class="k">'+(m==='ball'?'ball':'player')+'</span> to lock on',1800);}
 }
 const mPlayer=document.getElementById('mPlayer'),mBall=document.getElementById('mBall');
 mPlayer.onclick=()=>pickMode('player');mBall.onclick=()=>pickMode('ball');
@@ -400,13 +863,15 @@ document.getElementById('bHeat').onclick=function(){S.showHeat=!S.showHeat;this.
 document.getElementById('bLog').onclick=function(){document.getElementById('playsPanel').classList.toggle('show');this.classList.toggle('on');};
 document.getElementById('bUnit').onclick=function(){
   S.unit=S.unit==='kmh'?'mph':S.unit==='mph'?'ms':'kmh';
-  const l={kmh:'KM/H',mph:'MPH',ms:'M/S'}[S.unit];
+  const l=unitLabel();
   this.textContent=l;document.getElementById('spdUnit').textContent=l;renderPlays();
+  if(S.summary){renderSummary();drawSparkline();}
 };
 document.getElementById('bReset').onclick=()=>{
-  S.target=null;S.searching=false;S.maxV=0;S.distM=0;S.smoothV=0;S.peakV=0;S.lastT=0;S.startT=0;
-  S.trail=[];if(S.heat)S.heat.fill(0);
-  setMode('STANDBY');spd.textContent='0.0';peak.textContent='0.0';mx.textContent='0.0';dist.textContent='0';clk.textContent='0.0';
+  resetTrajectory();resetBallTracker();S.speedSeries=[];S.summary=null;S.lost=0;
+  document.getElementById('summaryCard').classList.remove('show');
+  setMode(S.source==='file'?'FILE':'STANDBY');
+  spd.textContent='0.0';peak.textContent='0.0';mx.textContent='0.0';dist.textContent='0';clk.textContent='0.0';
   flash('Reset',1000);
 };
 document.getElementById('sens').oninput=e=>{S.conf=e.target.value/100;};
