@@ -88,6 +88,23 @@
   .summary .mini{margin-bottom:8px}
   .spark{width:100%;height:42px;margin-top:4px;display:block}
   .srange{font-size:9px;letter-spacing:.16em;color:var(--dim);text-transform:uppercase;margin-top:5px;line-height:1.5}
+  .conf{font-size:8px;letter-spacing:.14em;padding:2px 6px;border-radius:2px;vertical-align:middle}
+  .conf.high{color:#08130a;background:var(--accent)}
+  .conf.med{color:#06222a;background:var(--accent2)}
+  .conf.low{color:#fff;background:var(--warn)}
+  .readout.scale{display:none}.readout.scale.show{display:block}
+  .calsheet{position:absolute;left:50%;bottom:118px;transform:translateX(-50%);z-index:9;width:min(420px,92vw);
+    background:var(--panel);backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:6px;padding:14px;
+    display:none;font-family:var(--mono)}
+  .calsheet.show{display:block}
+  .calsheet h4{font-size:10px;letter-spacing:.22em;color:var(--accent);text-transform:uppercase;margin-bottom:10px}
+  .calgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+  .calchip{text-align:left;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.14);
+    border-radius:4px;padding:10px;cursor:pointer;transition:.15s;color:var(--ink)}
+  .calchip:active{transform:scale(.97)}.calchip:hover{border-color:var(--accent2)}
+  .calchip b{display:block;font-size:12px;letter-spacing:.04em}
+  .calchip span{font-size:9px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase}
+  .calnote{font-size:9px;color:var(--dim);letter-spacing:.1em;line-height:1.6;margin-top:8px}
 
   .hint{position:absolute;left:50%;top:54%;transform:translate(-50%,-50%);z-index:7;
     font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-align:center;color:var(--ink);
@@ -136,7 +153,7 @@
 
   <div class="hud">
     <div class="readout"><div class="lbl">Speed</div>
-      <div><span class="val" id="spd">0.0</span> <span class="unit" id="spdUnit">KM/H</span></div></div>
+      <div><span class="val" id="spd">0.0</span> <span class="unit" id="spdUnit">MPH</span></div></div>
     <div class="mini">
       <div class="readout alt"><div class="lbl">Play Peak</div><span class="val" id="peak">0.0</span></div>
       <div class="readout alt"><div class="lbl">Max</div><span class="val" id="mx">0.0</span></div>
@@ -145,12 +162,16 @@
       <div class="readout"><div class="lbl">Dist m</div><span class="val" id="dist">0</span></div>
       <div class="readout"><div class="lbl">Time s</div><span class="val" id="clk">0.0</span></div>
     </div>
+    <div class="mini">
+      <div class="readout alt scale" id="scaleCard"><div class="lbl">Scale</div>
+        <div><span class="val" id="scaleVal">0</span> <span class="unit">PX/M</span></div></div>
+    </div>
   </div>
 
   <div class="plays" id="playsPanel"><h4>Play Log</h4><div id="playList" class="empty">No plays yet</div></div>
 
   <div class="summary" id="summaryCard">
-    <h4>Clip Summary</h4>
+    <h4>Clip Summary <span class="conf" id="sumConf"></span></h4>
     <div class="mini">
       <div class="readout alt"><div class="lbl">Peak</div><span class="val" id="sumPeak">0.0</span></div>
       <div class="readout alt"><div class="lbl">Avg</div><span class="val" id="sumAvg">0.0</span></div>
@@ -160,7 +181,14 @@
       <div class="readout"><div class="lbl">Players</div><span class="val" id="sumPlayers">0</span></div>
     </div>
     <canvas id="spark" class="spark"></canvas>
-    <div class="srange">speed over clip · 2D image-plane</div>
+    <div class="srange" id="sumNote">speed over clip · 2D image-plane</div>
+  </div>
+
+  <div class="calsheet" id="calSheet">
+    <h4>Set Scale · pick a reference</h4>
+    <div class="calgrid" id="calGrid"></div>
+    <button class="btn warn" id="calCancel">Cancel</button>
+    <div class="calnote">Then tap the two ends of it in the video — spread them wide for an accurate scale.</div>
   </div>
 
   <div class="hint" id="hint"></div>
@@ -200,7 +228,7 @@
       <div class="row">
         <button class="btn on" id="bTrail">Trail</button>
         <button class="btn" id="bHeat">Heatmap</button>
-        <button class="btn" id="bUnit">KM/H</button>
+        <button class="btn" id="bUnit">MPH</button>
       </div>
       <div class="row">
         <button class="btn" id="bLog">Log</button>
@@ -248,13 +276,27 @@ const S={
   running:false, mode:'player', conf:0.42,
   source:'camera', fileURL:null,
   analyzing:false, analyzePct:0, scrubbing:false,
-  summary:null, speedSeries:[], vSamples:[], maxPersons:0, personCounts:[], fileFps:30,
+  summary:null, speedSeries:[], fitSamples:[], maxPersons:0, personCounts:[], fileFps:30,
   target:null, lost:0, searching:false, dets:[],
-  calStage:0, calPts:[], ppm:null,
-  lastT:0, startT:0, maxV:0, distM:0, smoothV:0, unit:'kmh',
+  calStage:0, calPts:[], ppm:null, calMeters:null, calLabel:null,
+  win:[], fitV:0, clampHits:0, clampTotal:0, trackValid:0, trackTotal:0, quality:null,
+  lastT:0, startT:0, maxV:0, distM:0, smoothV:0, unit:'mph',
   trail:[], showTrail:true, showHeat:false, heat:null, HX:48, HY:0,
   recording:false, peakV:0, playDist:0, playStart:0, plays:[]
 };
+// speed-accuracy tuning
+const WIN_N=7, WIN_T_MAX=0.5;            // trajectory-fit window: max samples / max age (s)
+const CEIL={ball:50,player:12};          // m/s physical ceiling (~112 mph ball / 27 mph player)
+const TYP={ball:[15,50],player:[2,11]};  // m/s plausible band (confidence only)
+const OVER_FRAC_FLAG=0.15;               // >15% of samples over ceiling ⇒ scale is wrong
+// calibration
+const MIN_SPAN_FRAC=0.08;                // reject calibration taps closer than 8% of frame width
+const CAL_PRESETS=[
+  {id:'mouth', label:'Goal mouth', sub:'6 ft wide', m:1.83},
+  {id:'height',label:'Goal height',sub:'6 ft tall', m:1.83},
+  {id:'crease',label:'Crease',     sub:'18 ft across', m:5.49},
+  {id:'custom',label:'Custom',     sub:'enter metres', m:null}
+];
 const COCO_CLASS=()=>S.mode==='ball'?'sports ball':'person';
 const unitLabel=()=>({kmh:'KM/H',mph:'MPH',ms:'M/S'}[S.unit]);
 // timebase: a live stream has no media timeline, so wall-clock is correct; a file
@@ -295,7 +337,7 @@ async function boot(){
     st.innerHTML='<span class="spin"></span>Loading vision model… (first load downloads ~6MB)';
     model=model||await cocoSsd.load({base:'lite_mobilenet_v2'});
     document.getElementById('gate').style.display='none';
-    S.source='camera';S.running=true;loadPlays();renderPlays();setSourceUI('camera');
+    S.source='camera';S.running=true;loadPlays();renderPlays();loadScale();setSourceUI('camera');
     flash('Tap a detected <span class="k">'+(S.mode==='ball'?'ball':'player')+'</span> to lock on',2800);
     requestAnimationFrame(loop);detectLoop();
   }catch(e){
@@ -330,7 +372,7 @@ async function bootFile(file){
     if(!model){st.innerHTML='<span class="spin"></span>Loading vision model… (first load downloads ~6MB)';
       model=await cocoSsd.load({base:'lite_mobilenet_v2'});}
     document.getElementById('gate').style.display='none';
-    S.source='file';S.running=true;loadPlays();renderPlays();
+    S.source='file';S.running=true;loadPlays();renderPlays();loadScale();
     setSourceUI('file');bindTransport();setMode('FILE');
     flash('Scrub the clip or hit <span class="k">Analyze</span>.\nSet Scale first for real speeds · reads image-plane (2D) — film side-on for the truest number',4200);
     requestAnimationFrame(loop);detectLoop();
@@ -390,22 +432,28 @@ function associate(t){
     const prev={x:S.target.x,y:S.target.y},k=0.5;
     S.target={x:S.target.x+(best.x-S.target.x)*k,y:S.target.y+(best.y-S.target.y)*k,w:best.w,h:best.h};
     measure(t,prev,S.target);
-  }else{if(++S.lost>14)S.searching=true;}
+  }else{S.trackTotal++;if(++S.lost>14){S.searching=true;S.win=[];}} // clear fit window on hard loss
 }
 
 function measure(t,prev,cur){
-  if(S.lastT){
-    const dt=(t-S.lastT)/1000;
-    const dpx=Math.hypot(cur.x-prev.x,cur.y-prev.y);
-    // outlier gate: a real target can't cross ~half the frame in one inter-frame gap.
-    // drops target-swap spikes so a single bad detection never inflates peak.
-    if(dt>0&&dt<1&&S.ppm&&dpx<0.45*CW){
-      const m=dpx/S.ppm,v=m/dt;
-      S.smoothV=S.smoothV*0.65+v*0.35;
-      S.vSamples.push(v);if(S.vSamples.length>4000)S.vSamples.shift(); // raw, for robust peak
-      if(v>0.05){S.distM+=m;if(S.recording)S.playDist+=m;}
-      if(S.smoothV>S.maxV)S.maxV=S.smoothV;
-      if(S.recording&&S.smoothV>S.peakV)S.peakV=S.smoothV;
+  const ts=t/1000;
+  S.win.push({t:ts,x:cur.x,y:cur.y});
+  while(S.win.length&&ts-S.win[0].t>WIN_T_MAX)S.win.shift();
+  if(S.win.length>WIN_N)S.win.shift();
+  S.trackTotal++;
+  if(S.ppm&&S.win.length>=3){
+    const fv=fitVelocity(S.win);
+    if(fv){
+      const v=Math.hypot(fv.vx,fv.vy)/S.ppm;        // m/s, trajectory-fitted
+      const ceil=CEIL[S.mode]||CEIL.player;
+      S.clampTotal++;
+      if(v<=ceil){                                   // physical clamp: reject BEFORE peak
+        S.fitV=v;S.fitSamples.push(v);if(S.fitSamples.length>4000)S.fitSamples.shift();
+        S.trackValid++;
+        if(v>0.05){const m=Math.hypot(cur.x-prev.x,cur.y-prev.y)/S.ppm;S.distM+=m;if(S.recording)S.playDist+=m;}
+        if(v>S.maxV)S.maxV=v;
+        if(S.recording&&v>S.peakV)S.peakV=v;
+      }else S.clampHits++;                            // over a real lacrosse speed ⇒ scale wrong
     }
   }
   S.lastT=t;if(!S.startT)S.startT=t;
@@ -416,7 +464,7 @@ function measure(t,prev,cur){
 }
 const conv=v=>S.unit==='kmh'?v*3.6:S.unit==='mph'?v*2.23694:v;
 function updateHUD(t){
-  spd.textContent=conv(S.smoothV).toFixed(1);peak.textContent=conv(S.peakV).toFixed(1);
+  spd.textContent=S.ppm?conv(S.fitV).toFixed(1):'—';peak.textContent=conv(S.peakV).toFixed(1);
   mx.textContent=conv(S.maxV).toFixed(1);
   dist.textContent=S.distM<10?S.distM.toFixed(1):Math.round(S.distM);
   clk.textContent=(S.source==='file'?video.currentTime:(t-(S.startT||t))/1000).toFixed(1);
@@ -424,8 +472,9 @@ function updateHUD(t){
 
 /* ============================ OFFLINE ANALYSIS PASS ============================ */
 function resetTrajectory(){
-  S.target=null;S.searching=false;S.maxV=0;S.distM=0;S.smoothV=0;S.peakV=0;S.lastT=0;S.startT=0;
-  S.trail=[];S.vSamples=[];if(S.heat)S.heat.fill(0);
+  S.target=null;S.searching=false;S.maxV=0;S.distM=0;S.smoothV=0;S.fitV=0;S.peakV=0;S.lastT=0;S.startT=0;
+  S.trail=[];S.fitSamples=[];S.win=[];S.clampHits=0;S.clampTotal=0;S.trackValid=0;S.trackTotal=0;
+  if(S.heat)S.heat.fill(0);
 }
 // Step to time t and resolve once the decoded frame is ready to draw. The <video>
 // is display:none (we draw to canvas, not composite it), so requestVideoFrameCallback
@@ -484,16 +533,24 @@ function countPersons(preds){
   if(kept.length>S.maxPersons)S.maxPersons=kept.length;
 }
 function median(arr){if(!arr.length)return 0;const a=[...arr].sort((p,q)=>p-q);return a[a.length>>1];}
-// robust peak: 3-sample median filter kills 1-2 frame detection spikes, then take the
-// max of the filtered series — captures a real multi-frame sprint without latching noise.
+// robust peak: 3-sample median filter kills residual 1-frame artifacts, then take the
+// 95th percentile (not raw max) so one surviving glitch can't define the headline.
 function robustPeak(arr){
-  if(!arr.length)return 0;if(arr.length<3)return Math.max(0,...arr);
-  let mx=0;
-  for(let i=0;i<arr.length;i++){
+  if(!arr.length)return 0;
+  const f=arr.length<3?arr.slice():arr.map((_,i)=>{
     const a=arr[Math.max(0,i-1)],b=arr[i],c=arr[Math.min(arr.length-1,i+1)];
-    const m=[a,b,c].sort((p,q)=>p-q)[1];if(m>mx)mx=m;
-  }
-  return mx;
+    return [a,b,c].sort((p,q)=>p-q)[1];});
+  const s=[...f].sort((p,q)=>p-q);
+  return s[Math.min(s.length-1,Math.max(0,Math.round(0.95*(s.length-1))))];
+}
+// least-squares velocity over a short rolling window of {t(s),x,y} → {vx,vy} px/s.
+// far steadier than a 2-point difference: one bad detection barely shifts the slope.
+function fitVelocity(win){
+  const n=win.length;if(n<2)return null;
+  let st=0,stt=0,sx=0,sy=0,stx=0,sty=0;const t0=win[0].t;
+  for(const p of win){const t=p.t-t0;st+=t;stt+=t*t;sx+=p.x;sy+=p.y;stx+=t*p.x;sty+=t*p.y;}
+  const den=n*stt-st*st;if(den<=1e-9)return null; // identical timestamps (stalled seek)
+  return {vx:(n*stx-st*sx)/den, vy:(n*sty-st*sy)/den};
 }
 
 async function analyzePass(){
@@ -529,7 +586,7 @@ async function analyzePass(){
           S.target={x:top.x,y:top.y,w:top.w,h:top.h};S.lastT=0;}
         associate(mtMs);
       }
-      S.speedSeries.push(S.smoothV);if(S.speedSeries.length>1500)S.speedSeries.shift();
+      S.speedSeries.push(S.fitV);if(S.speedSeries.length>1500)S.speedSeries.shift();
     }
     S.analyzePct=d?Math.min(1,t/d):1;updateProgress();
     await new Promise(r=>setTimeout(r,0)); // yield so UI/cancel stays responsive
@@ -539,7 +596,11 @@ async function analyzePass(){
   if(S.analyzing){
     buildSummary();
     try{video.currentTime=0;}catch(e){}
-    flash('Analysis complete · peak <span class="k">'+conv(S.summary.peakMs).toFixed(1)+'</span> '+unitLabel(),2800);
+    flash(S.summary.scaleLikelyWrong
+      ?'Done — but speeds exceed a real lacrosse shot. <span class="k">Re-tap Set Scale</span> across a wide known distance.'
+      :!S.summary.calibrated
+        ?'Tracked it — but <span class="k">no scale set</span>. Tap Set Scale for real mph, then Analyze again.'
+        :'Analysis complete · peak <span class="k">'+conv(S.summary.peakMs).toFixed(1)+'</span> '+unitLabel(),3400);
   }
   S.analyzing=false;
 }
@@ -548,17 +609,47 @@ function updateProgress(){
   document.getElementById('apct').textContent=(S.analyzePct*100|0)+'%';
 }
 function buildSummary(){
-  const ser=S.speedSeries.filter(v=>v>0.5);
+  const ser=S.fitSamples.filter(v=>v>0.5);
   const avg=ser.length?ser.reduce((a,b)=>a+b,0)/ser.length:0;
-  S.summary={peakMs:robustPeak(S.vSamples),avgMs:avg,dist:S.distM,players:median(S.personCounts)};
+  const peak=robustPeak(S.fitSamples);
+  const ceil=CEIL[S.mode]||CEIL.player;
+  const overFrac=S.clampTotal?S.clampHits/S.clampTotal:0;
+  // a uniform scale error pushes EVERY sample over the ceiling — that's the 600mph signature
+  const scaleLikelyWrong=!S.ppm?false:(overFrac>OVER_FRAC_FLAG||peak>=ceil*0.98);
+  S.summary={peakMs:peak,avgMs:avg,dist:S.distM,players:median(S.personCounts),
+    quality:computeQuality(peak),scaleLikelyWrong,calibrated:!!S.ppm};
   renderSummary();drawSparkline();
+}
+function computeQuality(peak){
+  const reasons=[];
+  const cont=S.trackTotal?S.trackValid/S.trackTotal:0;if(cont<0.6)reasons.push('intermittent track');
+  const nOk=S.fitSamples.length;if(nOk<8)reasons.push('few samples');
+  let scaleScore=1;
+  if(S.ppm&&S.target){ // does the scale agree with the detected target's real size?
+    const realH=S.mode==='ball'?0.063:1.7,ppmBox=S.target.h/realH,ratio=ppmBox>0?S.ppm/ppmBox:0;
+    if(!(ratio>0.33&&ratio<3)){scaleScore=0.2;reasons.push('scale vs target size looks off');}
+  }
+  const t=TYP[S.mode]||TYP.player,inBand=(peak>=t[0]*0.5&&peak<=t[1]*1.1);
+  if(!inBand&&S.ppm)reasons.push('peak outside typical range');
+  let score=0.35*cont+0.2*Math.min(1,nOk/20)+0.3*scaleScore+0.15*(inBand?1:0.3);
+  if(!S.ppm)score=Math.min(score,0.3);
+  const label=score>=0.66?'HIGH':score>=0.4?'MED':'LOW';
+  return{score:+score.toFixed(2),label,reasons};
 }
 function renderSummary(){
   if(!S.summary)return;
-  document.getElementById('sumPeak').textContent=conv(S.summary.peakMs).toFixed(1);
-  document.getElementById('sumAvg').textContent=conv(S.summary.avgMs).toFixed(1);
-  document.getElementById('sumDist').textContent=S.summary.dist<10?S.summary.dist.toFixed(1):Math.round(S.summary.dist);
-  document.getElementById('sumPlayers').textContent=S.summary.players;
+  const s=S.summary,bad=s.scaleLikelyWrong,nocal=!s.calibrated;
+  document.getElementById('sumPeak').textContent=bad?'⚠':nocal?'—':conv(s.peakMs).toFixed(1);
+  document.getElementById('sumAvg').textContent=(bad||nocal)?'—':conv(s.avgMs).toFixed(1);
+  document.getElementById('sumDist').textContent=s.dist<10?s.dist.toFixed(1):Math.round(s.dist);
+  document.getElementById('sumPlayers').textContent=s.players;
+  const badge=document.getElementById('sumConf');
+  badge.textContent=nocal?'NO SCALE':bad?'CHECK SCALE':s.quality.label;
+  badge.className='conf '+((bad||nocal)?'low':s.quality.label.toLowerCase());
+  document.getElementById('sumNote').textContent=
+    bad?'Reading exceeds a real lacrosse speed — re-tap Set Scale across a known distance.'
+    :nocal?'No scale set — tap Set Scale for real mph.'
+    :(s.quality.reasons[0]||'speed over clip · 2D image-plane');
   document.getElementById('summaryCard').classList.add('show');
 }
 function drawSparkline(){
@@ -726,7 +817,7 @@ function loop(){
   if(video.readyState>=2)ctx.drawImage(video,cover.dx,cover.dy,cover.dw,cover.dh);
   if(S.showHeat)drawHeat();
   if(S.showTrail)drawTrail();
-  if(S.calStage>0)drawCal();else{drawCandidates();drawTarget();}
+  if(S.calStage)drawCal();else{drawCandidates();drawTarget();}
   if(S.source==='file'&&!S.scrubbing){
     const d=isFinite(video.duration)&&video.duration>0?video.duration:0;
     document.getElementById('scrub').value=d?(video.currentTime/d*1000)|0:0;
@@ -750,7 +841,7 @@ function drawTarget(){
   });
   ctx.beginPath();ctx.arc(x,y,3.5*DPR,0,7);ctx.fillStyle=col;ctx.fill();
   ctx.globalAlpha=1;ctx.font=`700 ${13*DPR}px ui-monospace,Menlo,monospace`;
-  const lab=S.searching?'SEARCHING':conv(S.smoothV).toFixed(1)+' '+S.unit.toUpperCase();
+  const lab=S.searching?'SEARCHING':(S.ppm?conv(S.fitV).toFixed(1)+' '+S.unit.toUpperCase():'NO SCALE');
   const tw=ctx.measureText(lab).width+14*DPR;
   ctx.fillStyle='rgba(7,9,12,.8)';ctx.fillRect(bx,by-22*DPR,tw,20*DPR);
   ctx.fillStyle=col;ctx.fillText(lab,bx+7*DPR,by-7*DPR);
@@ -787,7 +878,7 @@ function drawCal(){
 cv.addEventListener('pointerdown',e=>{
   if(!S.running)return;
   const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)*DPR,y=(e.clientY-r.top)*DPR;
-  if(S.calStage>0){calTap(x,y);return;}
+  if(S.calStage){calTap(x,y);return;}
   let pick=null,bd=1e9;
   for(const d of S.dets){
     const inside=Math.abs(x-d.x)<d.w/2&&Math.abs(y-d.y)<d.h/2,dist=Math.hypot(x-d.x,y-d.y);
@@ -802,24 +893,53 @@ cv.addEventListener('pointerdown',e=>{
 
 function startCal(){
   if(!S.running){flash('Start first',1200);return;}
-  S.calStage=1;S.calPts=[];
+  if(S.calStage){endCal();return;} // toggle off
+  S.calStage='pick';S.calPts=[];S.calMeters=null;S.calLabel=null;
   document.getElementById('bCal').classList.add('on');document.getElementById('bCalF').classList.add('on');
-  flash('Tap two points a <span class="k">known distance</span> apart\n(court width, penalty box, a 5 m line)',3000);
+  openCalSheet();
 }
 document.getElementById('bCal').onclick=startCal;
 document.getElementById('bCalF').onclick=startCal;
-function calTap(x,y){
-  S.calPts.push({x,y});
-  if(S.calPts.length===2){
-    const dpx=Math.hypot(S.calPts[1].x-S.calPts[0].x,S.calPts[1].y-S.calPts[0].y);
-    setTimeout(()=>{
-      const m=parseFloat(prompt('Distance between the two points, in meters?','5'));
-      if(m>0){S.ppm=dpx/m;flash('Scale set · '+(dpx/m).toFixed(0)+' px/m',1800);}else flash('Cancelled',1200);
-      S.calStage=0;S.calPts=[];
-      document.getElementById('bCal').classList.remove('on');document.getElementById('bCalF').classList.remove('on');
-    },40);
-  }else flash('Now tap the <span class="k">2nd</span> point',1400);
+function buildCalGrid(){
+  const g=document.getElementById('calGrid');if(g.childElementCount)return;
+  CAL_PRESETS.forEach(p=>{const b=document.createElement('button');b.className='calchip';
+    b.innerHTML='<b>'+p.label+'</b><span>'+p.sub+'</span>';b.onclick=()=>chooseCalPreset(p);g.appendChild(b);});
 }
+function openCalSheet(){buildCalGrid();document.getElementById('calSheet').classList.add('show');}
+function closeCalSheet(){document.getElementById('calSheet').classList.remove('show');}
+function chooseCalPreset(p){
+  if(p.id==='custom'){const m=parseFloat(prompt('Reference length in metres?','5'));if(!(m>0))return;S.calMeters=m;S.calLabel='Custom '+m+' m';}
+  else{S.calMeters=p.m;S.calLabel=p.label+' ('+p.sub+')';}
+  closeCalSheet();S.calStage='tap';S.calPts=[];
+  flash('Tap the <span class="k">two ends</span> of '+S.calLabel+'\nspread them as wide as you can',3200);
+}
+function calTap(x,y){
+  if(S.calStage!=='tap')return;
+  S.calPts.push({x,y});
+  if(S.calPts.length<2){flash('Now tap the <span class="k">other end</span>',1400);return;}
+  const a=S.calPts[0],b=S.calPts[1],dpx=Math.hypot(b.x-a.x,b.y-a.y);
+  if(dpx<MIN_SPAN_FRAC*CW){S.calPts=[];flash('Those points are <span class="k">too close</span> — spread them wider for an accurate scale',3000);return;}
+  applyScale(dpx/S.calMeters);endCal();
+}
+function applyScale(ppm){
+  S.ppm=ppm;try{localStorage.setItem('zenith_ppm',String(ppm));}catch(e){}
+  updateScaleReadout();
+  const fieldW=CW/ppm,mph=((CW/ppm)/0.15)*2.23694;
+  flash('Scale set · <span class="k">'+ppm.toFixed(0)+' px/m</span>\nview spans ~'+fieldW.toFixed(1)+' m ('+Math.round(fieldW*3.28)+' ft)\na ball crossing the frame in 0.15 s ≈ '+Math.round(mph)+' mph',5200);
+  if(S.source==='file'&&(S.summary||S.speedSeries.length))
+    setTimeout(()=>flash('Scale changed — hit <span class="k">Analyze Clip</span> again for updated speeds',3000),5400);
+}
+function endCal(){
+  S.calStage=0;S.calPts=[];closeCalSheet();
+  document.getElementById('bCal').classList.remove('on');document.getElementById('bCalF').classList.remove('on');
+}
+function updateScaleReadout(){
+  const card=document.getElementById('scaleCard');
+  if(S.ppm){document.getElementById('scaleVal').textContent=S.ppm.toFixed(0);card.classList.add('show');}
+  else card.classList.remove('show');
+}
+function loadScale(){try{const v=parseFloat(localStorage.getItem('zenith_ppm'));if(v>0)S.ppm=v;}catch(e){}updateScaleReadout();}
+document.getElementById('calCancel').onclick=endCal;
 
 document.getElementById('bAnalyze').onclick=analyzePass;
 document.getElementById('bNewClip').onclick=newClip;
