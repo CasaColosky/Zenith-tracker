@@ -226,7 +226,7 @@
 
     <div id="commonDock">
       <div class="row">
-        <button class="btn on" id="bTrail">Trail</button>
+        <button class="btn" id="bTrail">Trail</button>
         <button class="btn" id="bHeat">Heatmap</button>
         <button class="btn" id="bUnit">MPH</button>
       </div>
@@ -278,10 +278,10 @@ const S={
   analyzing:false, analyzePct:0, scrubbing:false,
   summary:null, speedSeries:[], fitSamples:[], maxPersons:0, personCounts:[], fileFps:30,
   target:null, lost:0, searching:false, dets:[],
-  calStage:0, calPts:[], ppm:null, calMeters:null, calLabel:null,
+  calStage:0, calPts:[], ppm:null, calMeters:null, calLabel:null, autoScale:false,
   win:[], fitV:0, clampHits:0, clampTotal:0, trackValid:0, trackTotal:0, quality:null,
   lastT:0, startT:0, maxV:0, distM:0, smoothV:0, unit:'mph',
-  trail:[], showTrail:true, showHeat:false, heat:null, HX:48, HY:0,
+  trail:[], showTrail:false, showHeat:false, heat:null, HX:48, HY:0,
   recording:false, peakV:0, playDist:0, playStart:0, plays:[]
 };
 // speed-accuracy tuning
@@ -553,10 +553,24 @@ function fitVelocity(win){
   return {vx:(n*stx-st*sx)/den, vy:(n*sty-st*sy)/den};
 }
 
+// auto-calibration: estimate px/m from the median detected player height (~1.8 m),
+// so the user never has to tap a reference. Approximate, but plenty for short clips.
+async function autoCalibrate(d){
+  const heights=[],sy=CH/AH;
+  for(let k=0;k<6&&S.analyzing;k++){
+    await seekTo(d*(k+0.5)/6);
+    if(video.readyState<2)continue;
+    actx.drawImage(video,cover.dx*AW/CW,cover.dy*AH/CH,cover.dw*AW/CW,cover.dh*AH/CH);
+    let preds=[];try{preds=await model.detect(adet,20,0.4);}catch(e){}
+    for(const p of preds)if(p.class==='person')heights.push(p.bbox[3]*sy);
+  }
+  if(heights.length<3)return null;
+  heights.sort((a,b)=>a-b);
+  return heights[heights.length>>1]/1.8; // px per metre
+}
 async function analyzePass(){
   if(S.analyzing)return;
   if(!model){flash('Model still loading…',1500);return;}
-  if(!S.ppm)flash('No scale set — showing raw motion. Tap <span class="k">Set Scale</span> for real speed',2600);
   S.analyzing=true;
   document.getElementById('bAnalyze').classList.add('on');
   document.getElementById('aprog').hidden=false;
@@ -568,6 +582,11 @@ async function analyzePass(){
   const d=isFinite(video.duration)&&video.duration>0?video.duration:await ensureDuration();
   if(!d){S.analyzing=false;document.getElementById('bAnalyze').classList.remove('on');
     document.getElementById('aprog').hidden=true;flash('Could not read clip length',2000);return;}
+  if(!S.ppm){ // no manual scale → auto-estimate from player size, zero setup
+    flash('Auto-scaling from players…',1600);
+    const a=await autoCalibrate(d);
+    if(a&&S.analyzing){S.ppm=a;S.autoScale=true;updateScaleReadout();}
+  }
   // sample cadence is decoupled from source fps: dt comes from each frame's real
   // media time, so a coarser step stays accurate while cutting seeks (fast on iOS).
   const step=1/(S.mode==='ball'?16:10);
@@ -632,6 +651,7 @@ function computeQuality(peak){
   const t=TYP[S.mode]||TYP.player,inBand=(peak>=t[0]*0.5&&peak<=t[1]*1.1);
   if(!inBand&&S.ppm)reasons.push('peak outside typical range');
   let score=0.35*cont+0.2*Math.min(1,nOk/20)+0.3*scaleScore+0.15*(inBand?1:0.3);
+  if(S.autoScale){score=Math.min(score,0.62);reasons.push('auto scale — approximate');}
   if(!S.ppm)score=Math.min(score,0.3);
   const label=score>=0.66?'HIGH':score>=0.4?'MED':'LOW';
   return{score:+score.toFixed(2),label,reasons};
@@ -800,6 +820,7 @@ function newClip(){
   S.analyzing=false;video.pause();revokeURL();
   try{video.removeAttribute('src');video.load();}catch(e){}
   resetTrajectory();resetBallTracker();S.speedSeries=[];S.summary=null;S.maxPersons=0;S.lost=0;
+  if(S.autoScale){S.ppm=null;S.autoScale=false;}updateScaleReadout(); // re-auto-scale for the next clip
   document.getElementById('summaryCard').classList.remove('show');
   document.getElementById('aprog').hidden=true;document.getElementById('bAnalyze').classList.remove('on');
   document.getElementById('bPlay').textContent='▶';
@@ -922,7 +943,7 @@ function calTap(x,y){
   applyScale(dpx/S.calMeters);endCal();
 }
 function applyScale(ppm){
-  S.ppm=ppm;try{localStorage.setItem('zenith_ppm',String(ppm));}catch(e){}
+  S.ppm=ppm;S.autoScale=false;try{localStorage.setItem('zenith_ppm',String(ppm));}catch(e){}
   updateScaleReadout();
   const fieldW=CW/ppm,mph=((CW/ppm)/0.15)*2.23694;
   flash('Scale set · <span class="k">'+ppm.toFixed(0)+' px/m</span>\nview spans ~'+fieldW.toFixed(1)+' m ('+Math.round(fieldW*3.28)+' ft)\na ball crossing the frame in 0.15 s ≈ '+Math.round(mph)+' mph',5200);
@@ -935,7 +956,8 @@ function endCal(){
 }
 function updateScaleReadout(){
   const card=document.getElementById('scaleCard');
-  if(S.ppm){document.getElementById('scaleVal').textContent=S.ppm.toFixed(0);card.classList.add('show');}
+  if(S.ppm){document.getElementById('scaleVal').textContent=S.ppm.toFixed(0);
+    card.querySelector('.unit').textContent=S.autoScale?'PX/M·AUTO':'PX/M';card.classList.add('show');}
   else card.classList.remove('show');
 }
 function loadScale(){try{const v=parseFloat(localStorage.getItem('zenith_ppm'));if(v>0)S.ppm=v;}catch(e){}updateScaleReadout();}
