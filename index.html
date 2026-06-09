@@ -108,6 +108,18 @@
   .bd-narr-lbl{display:block;font-size:8px;letter-spacing:.24em;color:var(--accent);text-transform:uppercase;margin-bottom:4px}
   .bd-narr p{font-family:var(--sans);font-size:11.5px;line-height:1.55;color:var(--ink)}
   .bd-narr p.muted{color:var(--dim);font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase}
+  .plays.players{width:190px}
+  .pcount{font-size:8px;letter-spacing:.14em;color:var(--dim)}
+  .pl.row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;cursor:pointer}
+  .pl.row b{font-size:14px}
+  .pl.row .pmeta{font-size:9px;color:var(--accent2);letter-spacing:.06em;text-align:right;line-height:1.5}
+  .pl.row.sel{border-left:2px solid var(--accent);margin-left:-10px;padding-left:8px;background:rgba(200,255,50,.06)}
+  .pl.row.sel b{color:var(--accent)}
+  .pcard .mini{margin-bottom:8px}
+  .pcard .val{font-size:18px}
+  .pback{font-family:var(--mono);font-size:14px;line-height:1;background:transparent;border:1px solid var(--line);
+    color:var(--accent);border-radius:3px;padding:2px 8px;cursor:pointer}
+  .pback:active{transform:scale(.92)}
   .readout.scale{display:none}.readout.scale.show{display:block}
   .calsheet{position:absolute;left:50%;bottom:118px;transform:translateX(-50%);z-index:9;width:min(420px,92vw);
     background:var(--panel);backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:6px;padding:14px;
@@ -206,6 +218,22 @@
     <div class="bd-narr"><span class="bd-narr-lbl">Recap</span><p id="bdNarrText">—</p></div>
   </div>
 
+  <div class="plays players" id="playersPanel"><h4>Players <span class="pcount" id="plCount"></span></h4>
+    <div id="playerList" class="empty">Analyze a clip first</div></div>
+
+  <div class="breakdown pcard" id="playerCard">
+    <h4><button class="pback" id="plBack">‹</button> <span id="pcName">P—</span> <span class="conf" id="pcConf"></span></h4>
+    <div class="mini">
+      <div class="readout alt"><div class="lbl">Top</div><span class="val" id="pcTop">0.0</span> <span class="unit" id="pcTopU">MPH</span></div>
+      <div class="readout"><div class="lbl">Touches</div><span class="val" id="pcTouch">0</span></div>
+    </div>
+    <div class="mini">
+      <div class="readout"><div class="lbl">Dist m</div><span class="val" id="pcDist">0</span></div>
+      <div class="readout"><div class="lbl">Poss s</div><span class="val" id="pcPoss">0.0</span></div>
+    </div>
+    <div class="srange">Time on screen <span id="pcTime">0.0</span>s · tap a player on the video or roster</div>
+  </div>
+
   <div class="calsheet" id="calSheet">
     <h4>Set Scale · pick a reference</h4>
     <div class="calgrid" id="calGrid"></div>
@@ -254,6 +282,7 @@
       </div>
       <div class="row">
         <button class="btn" id="bLog">Log</button>
+        <button class="btn" id="bPlayers">Players</button>
         <button class="btn warn" id="bReset">Reset</button>
       </div>
       <div class="sens"><span>Detect&nbsp;conf</span>
@@ -425,6 +454,7 @@ function setSourceUI(src){
   if(src!=='camera'){S.recording=false;document.getElementById('recTag').style.display='none';
     document.getElementById('bRec').classList.remove('on');document.getElementById('bRec').textContent='● Rec Play';}
   document.getElementById('playsPanel').classList.toggle('show',false);
+  hidePlayerUI();
 }
 
 /* ============================ LIVE DETECT LOOP ============================ */
@@ -501,7 +531,13 @@ function resetTrajectory(){
   S.target=null;S.searching=false;S.maxV=0;S.distM=0;S.smoothV=0;S.fitV=0;S.peakV=0;S.lastT=0;S.startT=0;
   S.trail=[];S.fitSamples=[];S.win=[];S.clampHits=0;S.clampTotal=0;S.trackValid=0;S.trackTotal=0;
   S.tracks=[];S.nextTrackId=1;S.trackArchive=[];S.ball=null;S.ballTrack=[];
+  S.selectedPlayer=null;S.players=[];
   if(S.heat)S.heat.fill(0);
+}
+function hidePlayerUI(){
+  const pc=document.getElementById('playerCard'),pp=document.getElementById('playersPanel'),bp=document.getElementById('bPlayers');
+  if(pc)pc.classList.remove('show');if(pp)pp.classList.remove('show');if(bp)bp.classList.remove('on');
+  renderPlayerList();
 }
 // Step to time t and resolve once the decoded frame is ready to draw. The <video>
 // is display:none (we draw to canvas, not composite it), so requestVideoFrameCallback
@@ -685,7 +721,106 @@ function buildPlayBreakdown(){
   if(intervals.length){const t0=ball[0].t,early=ball.filter(b=>b.t<=t0+0.5),cx=CW/2,cy=CH/2;
     const nearC=early.filter(b=>Math.hypot(b.x-cx,b.y-cy)<0.2*CW).length;
     if(early.length&&nearC>=Math.max(2,early.length*0.4))ev.faceoff={player:intervals[0].playerId};}
+  ev.intervals=intervals; // expose for per-player possession/touches
   return ev;
+}
+/* ===== per-player stats + on-video markers (individual-player interactivity) ===== */
+function trackQuality(tr,m){
+  const reasons=[];
+  const cont=m.totalW?m.validW/m.totalW:0;if(cont<0.6)reasons.push('intermittent track');
+  const coastFrac=tr.age?Math.min(1,(tr.age-tr.hits)/tr.age):0;if(coastFrac>0.35)reasons.push('coasted — id may have swapped');
+  if(m.nOk<8)reasons.push('few samples');
+  let scaleScore=1;
+  if(S.ppm){const hs=tr.samples.map(p=>p.h).sort((a,b)=>a-b),medH=hs[hs.length>>1]||0,ppmBox=medH>0?medH/1.7:0,ratio=ppmBox>0?S.ppm/ppmBox:0;if(!(ratio>0.33&&ratio<3)){scaleScore=0.2;reasons.push('scale vs body size off');}}
+  const t=TYP.player,inBand=(m.peak>=t[0]*0.5&&m.peak<=t[1]*1.1);if(!inBand&&S.ppm)reasons.push('peak outside typical range');
+  let score=0.35*cont+0.2*Math.min(1,m.nOk/20)+0.3*scaleScore+0.15*(inBand?1:0.3)-0.25*coastFrac;
+  if(S.autoScale)score=Math.min(score,0.62);
+  if(!S.ppm)score=Math.min(score,0.30);
+  score=Math.max(0,score);
+  return{label:score>=0.66?'HIGH':score>=0.4?'MED':'LOW',reasons};
+}
+function buildPlayerStats(){
+  const players=S.trackArchive.filter(t=>t.confirmed&&t.samples&&t.samples.length>=CONFIRM_HITS);
+  let intervals=[];try{intervals=(buildPlayBreakdown().intervals)||[];}catch(e){}
+  const possBy={},touchBy={};
+  for(const iv of intervals){possBy[iv.playerId]=(possBy[iv.playerId]||0)+(iv.tEnd-iv.tStart);touchBy[iv.playerId]=(touchBy[iv.playerId]||0)+1;}
+  const ceil=CEIL.player,out=[];
+  for(const tr of players){
+    const s=tr.samples,screenSec=s[s.length-1].t-s[0].t;
+    const win=[],fit=[];let validW=0,totalW=0;
+    for(const p of s){
+      win.push({t:p.t,x:p.x,y:p.y});
+      while(win.length&&p.t-win[0].t>WIN_T_MAX)win.shift();
+      if(win.length>WIN_N)win.shift();
+      if(S.ppm&&win.length>=3){const fv=fitVelocity(win);if(fv){totalW++;const v=Math.hypot(fv.vx,fv.vy)/S.ppm;if(v<=ceil){fit.push(v);validW++;}}}
+    }
+    const topMs=robustPeak(fit);
+    let distM=0;
+    if(S.ppm)for(let i=1;i<s.length;i++){const a=s[i-1],b=s[i],dt=Math.max(1e-3,b.t-a.t),m=Math.hypot(b.x-a.x,b.y-a.y)/S.ppm,v=m/dt;if(v>0.05&&v<=ceil)distM+=m;}
+    const q=trackQuality(tr,{validW,totalW,nOk:fit.length,peak:topMs});
+    out.push({id:tr.id,topMs,distM,possSec:possBy[tr.id]||0,touches:touchBy[tr.id]||0,screenSec,conf:q.label,reasons:q.reasons});
+  }
+  out.sort((a,b)=>S.ppm?(b.topMs-a.topMs):(b.screenSec-a.screenSec));
+  S.players=out;return out;
+}
+function nearestBox(tr,t){const s=tr.samples;let best=s[0],bd=Math.abs(s[0].t-t);for(let i=1;i<s.length;i++){const dd=Math.abs(s[i].t-t);if(dd<bd){bd=dd;best=s[i];}}return{w:best.w,h:best.h};}
+function buildPlayerMarkers(){
+  const out=[];if(!S.showPlayers)return out;
+  if(S.analyzing){for(const tr of S.tracks)out.push({id:tr.id,x:tr.x,y:tr.y,w:tr.w,h:tr.h,confirmed:!!tr.confirmed});}
+  else if(S.trackArchive.length){const t=video.currentTime,GAP=0.34;
+    for(const tr of S.trackArchive){if(!tr.confirmed)continue;const pos=sampleAt(tr,t,GAP);if(!pos)continue;const b=nearestBox(tr,t);out.push({id:tr.id,x:pos.x,y:pos.y,w:b.w,h:b.h,confirmed:true});}}
+  for(const m of out)m.sel=(m.id===S.selectedPlayer);
+  return out;
+}
+function drawPlayers(){
+  const ms=buildPlayerMarkers();if(!ms.length)return;
+  ctx.save();ctx.font=`700 ${11*DPR}px ui-monospace,Menlo,monospace`;ctx.textBaseline='middle';
+  for(const m of ms){
+    const sel=m.sel,col=sel?'#c8ff32':(m.confirmed?'#19e0ff':'rgba(25,224,255,.45)');
+    const bw=Math.max(14*DPR,m.w),bh=Math.max(28*DPR,m.h),bx=m.x-bw/2,by=m.y-bh/2;
+    ctx.globalAlpha=sel?1:(m.confirmed?.85:.5);ctx.lineWidth=(sel?2.5:1.5)*DPR;ctx.strokeStyle=col;
+    ctx.setLineDash(sel?[]:[5*DPR,4*DPR]);ctx.strokeRect(bx,by,bw,bh);ctx.setLineDash([]);
+    const lab='P'+m.id,tw=ctx.measureText(lab).width+8*DPR;
+    ctx.fillStyle='rgba(7,9,12,.78)';ctx.fillRect(bx,by-15*DPR,tw,14*DPR);
+    ctx.fillStyle=col;ctx.fillText(lab,bx+4*DPR,by-8*DPR);
+    ctx.beginPath();ctx.arc(m.x,m.y,(sel?3.5:2.2)*DPR,0,7);ctx.fillStyle=col;ctx.fill();
+  }
+  ctx.globalAlpha=1;ctx.restore();
+}
+function findTrackById(id){return S.tracks.find(t=>t.id===id)||S.trackArchive.find(t=>t.id===id)||null;}
+function selectPlayer(id){
+  S.selectedPlayer=id;const tr=findTrackById(id);
+  if(tr){const ls=tr.samples&&tr.samples[tr.samples.length-1];
+    S.target={x:tr.x!=null?tr.x:(ls?ls.x:0),y:tr.y!=null?tr.y:(ls?ls.y:0),w:tr.w||0.12*CW,h:tr.h||0.26*CH};S.lost=0;S.searching=false;}
+  renderPlayerList();renderPlayerCard();
+  flash('Player <span class="k">P'+id+'</span>'+(S.ppm?'':' · set scale for speed'),1600);
+}
+function clearPlayerSelection(){S.selectedPlayer=null;document.getElementById('playerCard').classList.remove('show');renderPlayerList();
+  if(S.breakdown)document.getElementById('breakdownCard').classList.add('show');else if(S.summary)document.getElementById('summaryCard').classList.add('show');}
+function fmtPlayerRow(p){const sp=S.ppm?conv(p.topMs).toFixed(1)+' '+S.unit:'—';
+  return '<div class="pl row'+(p.id===S.selectedPlayer?' sel':'')+'" data-pid="'+p.id+'"><span><b>P'+p.id+'</b></span><span class="pmeta">'+sp+'<br>'+p.touches+' touch · '+p.possSec.toFixed(1)+'s</span></div>';}
+function renderPlayerList(){
+  const el=document.getElementById('playerList');if(!el)return;
+  const ps=(S.players||[]).slice().sort((a,b)=>S.ppm?(b.topMs-a.topMs):(b.screenSec-a.screenSec));
+  const c=document.getElementById('plCount');if(c)c.textContent=ps.length?ps.length+' tracked':'';
+  if(!ps.length){el.className='empty';el.textContent='Analyze a clip first';return;}
+  el.className='';el.innerHTML=ps.map(fmtPlayerRow).join('');
+  el.querySelectorAll('.pl.row').forEach(r=>r.onclick=()=>selectPlayer(+r.dataset.pid));
+}
+function renderPlayerCard(){
+  const p=(S.players||[]).find(q=>q.id===S.selectedPlayer);
+  if(!p){document.getElementById('playerCard').classList.remove('show');return;}
+  document.getElementById('pcName').textContent='P'+p.id;
+  document.getElementById('pcTop').textContent=S.ppm?conv(p.topMs).toFixed(1):'—';
+  document.getElementById('pcTopU').textContent=unitLabel();
+  document.getElementById('pcTouch').textContent=p.touches;
+  document.getElementById('pcDist').textContent=S.ppm?(p.distM<10?p.distM.toFixed(1):Math.round(p.distM)):'—';
+  document.getElementById('pcPoss').textContent=p.possSec.toFixed(1);
+  document.getElementById('pcTime').textContent=p.screenSec.toFixed(1);
+  const badge=document.getElementById('pcConf');badge.textContent=p.conf;badge.className='conf '+String(p.conf).toLowerCase();
+  document.getElementById('breakdownCard').classList.remove('show');
+  document.getElementById('summaryCard').classList.remove('show');
+  document.getElementById('playerCard').classList.add('show');
 }
 async function analyzePass(){
   if(S.analyzing)return;
@@ -741,6 +876,8 @@ async function analyzePass(){
     for(const tr of S.tracks)if(tr.confirmed&&S.trackArchive.length<60)S.trackArchive.push(tr);
     if(S.analyzing){
       buildSummary();buildBreakdown();
+      try{buildPlayerStats();}catch(e){S.players=[];}
+      S.selectedPlayer=null;renderPlayerList();
       try{video.currentTime=0;}catch(e){}
       flash(cut?'Long clip — analyzed the first part. Trim to the play for a full read.'
         :S.summary.scaleLikelyWrong
@@ -1034,6 +1171,7 @@ function newClip(){
   if(S.autoScale){S.ppm=null;S.autoScale=false;}updateScaleReadout(); // re-auto-scale for the next clip
   S.breakdown=null;document.getElementById('breakdownCard').classList.remove('show');
   document.getElementById('summaryCard').classList.remove('show');
+  hidePlayerUI();
   document.getElementById('aprog').hidden=true;document.getElementById('bAnalyze').classList.remove('on');
   document.getElementById('bPlay').textContent='▶';
   spd.textContent='0.0';peak.textContent='0.0';mx.textContent='0.0';dist.textContent='0';clk.textContent='0.0';
@@ -1050,7 +1188,7 @@ function loop(){
   if(video.readyState>=2)ctx.drawImage(video,cover.dx,cover.dy,cover.dw,cover.dh);
   if(S.showHeat)drawHeat();
   if(S.showTrail)drawTrail();
-  if(S.calStage)drawCal();else{drawCandidates();drawTarget();}
+  if(S.calStage)drawCal();else{drawCandidates();drawPlayers();drawTarget();}
   if(S.source==='file'&&!S.scrubbing){
     const d=isFinite(video.duration)&&video.duration>0?video.duration:0;
     document.getElementById('scrub').value=d?(video.currentTime/d*1000)|0:0;
@@ -1112,6 +1250,14 @@ cv.addEventListener('pointerdown',e=>{
   if(!S.running)return;
   const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)*DPR,y=(e.clientY-r.top)*DPR;
   if(S.calStage){calTap(x,y);return;}
+  // tap a numbered player → select+follow that individual (player mode)
+  if(S.mode==='player'){
+    const ms=buildPlayerMarkers();let hitId=null,hbd=1e9;
+    for(const m of ms){const bw=Math.max(14*DPR,m.w),bh=Math.max(28*DPR,m.h);
+      if(Math.abs(x-m.x)<bw/2&&Math.abs(y-m.y)<bh/2){const dd=Math.hypot(x-m.x,y-m.y);if(dd<hbd){hbd=dd;hitId=m.id;}}}
+    if(hitId!=null){setMode(S.source==='file'?'FILE':'LIVE');selectPlayer(hitId);return;}
+  }
+  S.selectedPlayer=null;
   let pick=null,bd=1e9;
   for(const d of S.dets){
     const inside=Math.abs(x-d.x)<d.w/2&&Math.abs(y-d.y)<d.h/2,dist=Math.hypot(x-d.x,y-d.y);
@@ -1206,7 +1352,7 @@ function setMode(t){const e=document.getElementById('modeTag');e.textContent=t;
   e.classList.toggle('live',t==='LIVE');e.classList.toggle('file',t==='FILE');}
 function pickMode(m){
   if(S.analyzing){S.analyzing=false;document.getElementById('bAnalyze').classList.remove('on');document.getElementById('aprog').hidden=true;}
-  S.mode=m;S.target=null;S.searching=false;S.dets=[];S.lost=0;resetBallTracker();
+  S.mode=m;S.target=null;S.searching=false;S.dets=[];S.lost=0;resetBallTracker();S.players=[];S.selectedPlayer=null;hidePlayerUI();
   mPlayer.classList.toggle('on',m==='player');mBall.classList.toggle('on',m==='ball');
   if(S.running){setMode(S.source==='file'?'FILE':'STANDBY');flash('Tap the <span class="k">'+(m==='ball'?'ball':'player')+'</span> to lock on',1800);}
 }
@@ -1214,18 +1360,24 @@ const mPlayer=document.getElementById('mPlayer'),mBall=document.getElementById('
 mPlayer.onclick=()=>pickMode('player');mBall.onclick=()=>pickMode('ball');
 document.getElementById('bTrail').onclick=function(){S.showTrail=!S.showTrail;this.classList.toggle('on',S.showTrail);};
 document.getElementById('bHeat').onclick=function(){S.showHeat=!S.showHeat;this.classList.toggle('on',S.showHeat);};
-document.getElementById('bLog').onclick=function(){document.getElementById('playsPanel').classList.toggle('show');this.classList.toggle('on');};
+document.getElementById('bLog').onclick=function(){const o=document.getElementById('playsPanel').classList.toggle('show');this.classList.toggle('on',o);
+  if(o){document.getElementById('playersPanel').classList.remove('show');document.getElementById('bPlayers').classList.remove('on');}};
+document.getElementById('bPlayers').onclick=function(){const o=document.getElementById('playersPanel').classList.toggle('show');this.classList.toggle('on',o);
+  if(o){renderPlayerList();document.getElementById('playsPanel').classList.remove('show');document.getElementById('bLog').classList.remove('on');}};
+document.getElementById('plBack').onclick=clearPlayerSelection;
 document.getElementById('bUnit').onclick=function(){
   S.unit=S.unit==='kmh'?'mph':S.unit==='mph'?'ms':'kmh';
   const l=unitLabel();
   this.textContent=l;document.getElementById('spdUnit').textContent=l;renderPlays();
   if(S.summary){renderSummary();drawSparkline();}
   if(S.breakdown){buildBreakdown();}
+  renderPlayerList();if(S.selectedPlayer!=null)renderPlayerCard();
 };
 document.getElementById('bReset').onclick=()=>{
   resetTrajectory();resetBallTracker();S.speedSeries=[];S.summary=null;S.breakdown=null;S.lost=0;
   document.getElementById('summaryCard').classList.remove('show');
   document.getElementById('breakdownCard').classList.remove('show');
+  hidePlayerUI();
   setMode(S.source==='file'?'FILE':'STANDBY');
   spd.textContent='0.0';peak.textContent='0.0';mx.textContent='0.0';dist.textContent='0';clk.textContent='0.0';
   flash('Reset',1000);
