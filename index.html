@@ -92,6 +92,22 @@
   .conf.high{color:#08130a;background:var(--accent)}
   .conf.med{color:#06222a;background:var(--accent2)}
   .conf.low{color:#fff;background:var(--warn)}
+  .breakdown{position:absolute;right:14px;top:64px;z-index:6;width:222px;
+    background:var(--panel);backdrop-filter:blur(6px);border:1px solid var(--line);border-radius:4px;
+    padding:10px;display:none;font-family:var(--mono)}
+  .breakdown.show{display:block}
+  .breakdown h4{font-size:9px;letter-spacing:.24em;color:var(--accent);text-transform:uppercase;margin-bottom:8px}
+  .bd-ev{display:flex;justify-content:space-between;gap:10px;align-items:baseline;
+    border-top:1px solid rgba(255,255,255,.08);padding:6px 0;font-size:10px;color:var(--dim)}
+  .bd-ev:first-child{border-top:0}
+  .bd-ev .k{text-transform:uppercase;letter-spacing:.16em;font-size:8.5px;white-space:nowrap}
+  .bd-ev .v{color:var(--ink);font-size:12px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
+  .bd-ev .v em{color:var(--accent2);font-style:normal}
+  .bd-ev.hot .v{color:var(--accent)}
+  .bd-narr{margin-top:9px;border-top:1px solid var(--line);padding-top:8px}
+  .bd-narr-lbl{display:block;font-size:8px;letter-spacing:.24em;color:var(--accent);text-transform:uppercase;margin-bottom:4px}
+  .bd-narr p{font-family:var(--sans);font-size:11.5px;line-height:1.55;color:var(--ink)}
+  .bd-narr p.muted{color:var(--dim);font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase}
   .readout.scale{display:none}.readout.scale.show{display:block}
   .calsheet{position:absolute;left:50%;bottom:118px;transform:translateX(-50%);z-index:9;width:min(420px,92vw);
     background:var(--panel);backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:6px;padding:14px;
@@ -182,6 +198,12 @@
     </div>
     <canvas id="spark" class="spark"></canvas>
     <div class="srange" id="sumNote">speed over clip · 2D image-plane</div>
+  </div>
+
+  <div class="breakdown" id="breakdownCard">
+    <h4>Play Breakdown <span class="conf" id="bdConf"></span></h4>
+    <div class="bd-events" id="bdEvents"></div>
+    <div class="bd-narr"><span class="bd-narr-lbl">Recap</span><p id="bdNarrText">—</p></div>
   </div>
 
   <div class="calsheet" id="calSheet">
@@ -280,6 +302,7 @@ const S={
   target:null, lost:0, searching:false, dets:[],
   calStage:0, calPts:[], ppm:null, calMeters:null, calLabel:null, autoScale:false,
   win:[], fitV:0, clampHits:0, clampTotal:0, trackValid:0, trackTotal:0, quality:null,
+  tracks:[], nextTrackId:1, trackArchive:[], ball:null, ballTrack:[], breakdown:null, _narrToken:0,
   lastT:0, startT:0, maxV:0, distM:0, smoothV:0, unit:'mph',
   trail:[], showTrail:false, showHeat:false, heat:null, HX:48, HY:0,
   recording:false, peakV:0, playDist:0, playStart:0, plays:[]
@@ -289,6 +312,8 @@ const WIN_N=7, WIN_T_MAX=0.5;            // trajectory-fit window: max samples /
 const CEIL={ball:50,player:12};          // m/s physical ceiling (~112 mph ball / 27 mph player)
 const TYP={ball:[15,50],player:[2,11]};  // m/s plausible band (confidence only)
 const OVER_FRAC_FLAG=0.15;               // >15% of samples over ceiling ⇒ scale is wrong
+// multi-object (player) tracking — SORT-style, geometry-only, no appearance model
+const MOT_GATE_FRAC=0.10, MOT_VEL_K=0.6, MOT_IOU_MIN=0.20, MOT_SIZE_RATIO=2.2, MOT_MAX_COAST=6, CONFIRM_HITS=3, MOT_MAX_TRACKS=12;
 // calibration
 const MIN_SPAN_FRAC=0.08;                // reject calibration taps closer than 8% of frame width
 const CAL_PRESETS=[
@@ -474,6 +499,7 @@ function updateHUD(t){
 function resetTrajectory(){
   S.target=null;S.searching=false;S.maxV=0;S.distM=0;S.smoothV=0;S.fitV=0;S.peakV=0;S.lastT=0;S.startT=0;
   S.trail=[];S.fitSamples=[];S.win=[];S.clampHits=0;S.clampTotal=0;S.trackValid=0;S.trackTotal=0;
+  S.tracks=[];S.nextTrackId=1;S.trackArchive=[];S.ball=null;S.ballTrack=[];
   if(S.heat)S.heat.fill(0);
 }
 // Step to time t and resolve once the decoded frame is ready to draw. The <video>
@@ -568,6 +594,98 @@ async function autoCalibrate(d){
   heights.sort((a,b)=>a-b);
   return heights[heights.length>>1]/1.8; // px per metre
 }
+/* ===== multi-player tracking (SORT-style, geometry-only) ===== */
+function dedupPersons(preds){ // dedup person boxes (IoU-NMS) → centre boxes in view coords; also feeds personCounts
+  const sx=CW/AW,sy=CH/AH;
+  const ps=preds.filter(p=>p.class==='person'&&p.score>=0.5).sort((a,b)=>b.score-a.score),kept=[];
+  for(const p of ps){const[x,y,w,h]=p.bbox;let dup=false;
+    for(const k of kept){const[X,Y,W2,H2]=k.bbox;
+      const ix=Math.max(0,Math.min(x+w,X+W2)-Math.max(x,X)),iy=Math.max(0,Math.min(y+h,Y+H2)-Math.max(y,Y));
+      const inter=ix*iy,uni=w*h+W2*H2-inter;if(uni>0&&inter/uni>0.5){dup=true;break;}}
+    if(!dup)kept.push(p);}
+  S.personCounts.push(kept.length);if(kept.length>S.maxPersons)S.maxPersons=kept.length;
+  return kept.map(p=>{const w=p.bbox[2]*sx,h=p.bbox[3]*sy;return{x:p.bbox[0]*sx+w/2,y:p.bbox[1]*sy+h/2,w,h,score:p.score};});
+}
+function iouBox(a,b){
+  const ax=a.x-a.w/2,ay=a.y-a.h/2,bx=b.x-b.w/2,by=b.y-b.h/2;
+  const ix=Math.max(0,Math.min(ax+a.w,bx+b.w)-Math.max(ax,bx)),iy=Math.max(0,Math.min(ay+a.h,by+b.h)-Math.max(ay,by));
+  const inter=ix*iy,uni=a.w*a.h+b.w*b.h-inter;return uni>0?inter/uni:0;
+}
+function trackPersons(dets,mt){
+  const gateBase=MOT_GATE_FRAC*CW;
+  for(const tr of S.tracks){const last=tr.samples[tr.samples.length-1],dt=Math.max(1e-3,mt-last.t);tr.px=tr.x+tr.vx*dt;tr.py=tr.y+tr.vy*dt;}
+  const pairs=[];
+  for(let ti=0;ti<S.tracks.length;ti++){const tr=S.tracks[ti];
+    const speed=Math.hypot(tr.vx,tr.vy),dtg=mt-tr.samples[tr.samples.length-1].t,gate=gateBase+speed*MOT_VEL_K*dtg;
+    for(let di=0;di<dets.length;di++){const d=dets[di];
+      const dist=Math.hypot(d.x-tr.px,d.y-tr.py),sr=Math.max(d.w/tr.w,tr.w/d.w,d.h/tr.h,tr.h/d.h);
+      if(dist>Math.max(gate,gateBase)||sr>MOT_SIZE_RATIO)continue;
+      const ov=iouBox({x:tr.px,y:tr.py,w:tr.w,h:tr.h},d);
+      if(dist>gateBase&&ov<MOT_IOU_MIN)continue;
+      pairs.push({ti,di,cost:dist-60*ov});}}
+  pairs.sort((a,b)=>a.cost-b.cost);
+  const usedT=new Set(),usedD=new Set();
+  for(const p of pairs){if(usedT.has(p.ti)||usedD.has(p.di))continue;usedT.add(p.ti);usedD.add(p.di);updateTrack(S.tracks[p.ti],dets[p.di],mt);}
+  const survivors=[];
+  for(let ti=0;ti<S.tracks.length;ti++){const tr=S.tracks[ti];
+    if(usedT.has(ti)){survivors.push(tr);continue;}
+    tr.x=tr.px;tr.y=tr.py;tr.coast++;tr.age++;
+    if(tr.coast<=MOT_MAX_COAST)survivors.push(tr);else if(tr.confirmed)S.trackArchive.push(tr);}
+  S.tracks=survivors;
+  const fresh=[];for(let di=0;di<dets.length;di++)if(!usedD.has(di))fresh.push(dets[di]);
+  fresh.sort((a,b)=>b.score-a.score);
+  for(const d of fresh){if(S.tracks.length>=MOT_MAX_TRACKS)break;
+    S.tracks.push({id:S.nextTrackId++,x:d.x,y:d.y,w:d.w,h:d.h,vx:0,vy:0,samples:[{t:mt,x:d.x,y:d.y,w:d.w,h:d.h}],lastSeen:mt,hits:1,age:1,coast:0,confirmed:false});}
+}
+function updateTrack(tr,d,mt){
+  const last=tr.samples[tr.samples.length-1],dt=Math.max(1e-3,mt-last.t),k=0.5;
+  const nx=tr.px+(d.x-tr.px)*k,ny=tr.py+(d.y-tr.py)*k;
+  tr.vx+=0.5*((d.x-last.x)/dt-tr.vx);tr.vy+=0.5*((d.y-last.y)/dt-tr.vy);
+  tr.x=nx;tr.y=ny;tr.w=d.w;tr.h=d.h;tr.coast=0;tr.age++;tr.hits++;tr.lastSeen=mt;
+  if(tr.hits>=CONFIRM_HITS)tr.confirmed=true;
+  tr.samples.push({t:mt,x:nx,y:ny,w:d.w,h:d.h});if(tr.samples.length>600)tr.samples.shift();
+}
+/* ===== possession + events from ball track + player tracks (free, deterministic) ===== */
+function sampleAt(track,t,gapT){
+  const s=track.samples||track;if(!s||!s.length)return null;
+  if(t<=s[0].t)return (s[0].t-t<=gapT)?{x:s[0].x,y:s[0].y}:null;
+  if(t>=s[s.length-1].t)return (t-s[s.length-1].t<=gapT)?{x:s[s.length-1].x,y:s[s.length-1].y}:null;
+  for(let i=1;i<s.length;i++)if(s[i].t>=t){const a=s[i-1],b=s[i];if(b.t-a.t>gapT)return null;const f=(t-a.t)/((b.t-a.t)||1);return{x:a.x+(b.x-a.x)*f,y:a.y+(b.y-a.y)*f};}
+  return null;
+}
+function buildPlayBreakdown(){
+  const ev={players:0,possession:[],passes:0,faceoff:null};
+  const players=S.trackArchive.filter(t=>t.confirmed&&t.samples&&t.samples.length>=CONFIRM_HITS);
+  ev.players=players.length;
+  const ball=S.ballTrack;
+  if(!ball.length||!players.length)return ev;
+  const GAP=0.18;
+  const medW=p=>{const ws=p.samples.map(s=>s.w).sort((a,b)=>a-b);return ws[ws.length>>1]||0.1*CW;};
+  const holdR=p=>{let base=0.9*medW(p);if(S.ppm)base=Math.max(base,0.8*S.ppm);return Math.min(base,0.28*CW);};
+  const raw=[];
+  for(const b of ball){let best=null,bd=1e9,second=1e9;
+    for(const p of players){const pos=sampleAt(p,b.t,GAP);if(!pos)continue;const dd=Math.hypot(b.x-pos.x,b.y-pos.y);
+      if(dd<holdR(p)){if(dd<bd){second=bd;bd=dd;best=p.id;}else if(dd<second)second=dd;}}
+    raw.push({t:b.t,who:best,contested:best!=null&&second<bd*1.15});}
+  const K=3,BRIDGE=3,intervals=[];let curId=null,start=0,end=0,run=0,bridge=0;
+  const closeIv=()=>{if(curId!=null&&run>=K)intervals.push({playerId:curId,tStart:start,tEnd:end});curId=null;run=0;bridge=0;};
+  for(const r of raw){
+    if(curId!=null&&r.who===curId){run++;end=r.t;bridge=0;}
+    else if(curId!=null&&(r.who==null||r.contested)&&bridge<BRIDGE){bridge++;end=r.t;}
+    else{closeIv();if(r.who!=null){curId=r.who;start=r.t;end=r.t;run=1;bridge=0;}}}
+  closeIv();
+  const secBy={};for(const iv of intervals)secBy[iv.playerId]=(secBy[iv.playerId]||0)+(iv.tEnd-iv.tStart);
+  ev.possession=Object.entries(secBy).map(([id,sec])=>({player:+id,seconds:sec})).sort((a,b)=>b.seconds-a.seconds);
+  let passes=0;
+  for(let i=1;i<intervals.length;i++){const A=intervals[i-1],B=intervals[i];if(A.playerId===B.playerId)continue;
+    const pa=sampleAt(ball,A.tEnd,1),pb=sampleAt(ball,B.tStart,1);
+    if(pa&&pb&&Math.hypot(pb.x-pa.x,pb.y-pa.y)>=0.10*CW)passes++;}
+  ev.passes=passes;
+  if(intervals.length){const t0=ball[0].t,early=ball.filter(b=>b.t<=t0+0.5),cx=CW/2,cy=CH/2;
+    const nearC=early.filter(b=>Math.hypot(b.x-cx,b.y-cy)<0.2*CW).length;
+    if(early.length&&nearC>=Math.max(2,early.length*0.4))ev.faceoff={player:intervals[0].playerId};}
+  return ev;
+}
 async function analyzePass(){
   if(S.analyzing)return;
   if(!model){flash('Model still loading…',1500);return;}
@@ -576,8 +694,9 @@ async function analyzePass(){
   document.getElementById('aprog').hidden=false;
   const keep=(S.mode==='player'&&S.target)?{...S.target}:null;
   resetTrajectory();if(keep)S.target=keep;
-  resetBallTracker();S.maxPersons=0;S.personCounts=[];S.speedSeries=[];
+  resetBallTracker();S.maxPersons=0;S.personCounts=[];S.speedSeries=[];S.breakdown=null;
   document.getElementById('summaryCard').classList.remove('show');
+  document.getElementById('breakdownCard').classList.remove('show');
   video.pause();
   const d=isFinite(video.duration)&&video.duration>0?video.duration:await ensureDuration();
   if(!d){S.analyzing=false;document.getElementById('bAnalyze').classList.remove('on');
@@ -589,20 +708,24 @@ async function analyzePass(){
   }
   // sample cadence is decoupled from source fps: dt comes from each frame's real
   // media time, so a coarser step stays accurate while cutting seeks (fast on iOS).
-  const step=1/(S.mode==='ball'?16:10);
+  const step=1/15; // single cadence for the dual (persons + ball) breakdown pass
   for(let t=0;t<=d+1e-3&&S.analyzing;t+=step){
     const mt=await seekTo(t);
     if(!S.analyzing)break; // aborted (New Clip / mode switch) mid-seek
     if(video.readyState>=2){
       const mtMs=mt*1000;
       actx.drawImage(video,cover.dx*AW/CW,cover.dy*AH/CH,cover.dw*AW/CW,cover.dh*AH/CH);
-      if(S.mode==='ball'){
-        await ballAnalyzeFrame(mtMs);
-      }else{
-        let preds=[];try{preds=await model.detect(adet,20,S.conf);}catch(e){}
-        countPersons(preds);mapPreds(preds,'person');
-        if(!S.target&&S.dets.length){const top=S.dets.reduce((a,b)=>b.score>a.score?b:a);
-          S.target={x:top.x,y:top.y,w:top.w,h:top.h};S.lastT=0;}
+      // ONE detect per frame feeds both the player MOT and the ball fusion (no double-detect)
+      let preds=[];try{preds=await model.detect(adet,20,0.25);}catch(e){}
+      const persons=dedupPersons(preds);
+      trackPersons(persons,mt);                               // persistent player ids
+      await ballAnalyzeFrame(mtMs,{sharedPreds:preds});       // sets S.ball; doesn't own S.dets/measure
+      if(S.ball)S.ballTrack.push({t:mt,x:S.ball.x,y:S.ball.y});// ball path for possession
+      S.dets=persons;                                         // draw persons as candidates
+      if(S.mode==='ball'){                                    // speed metric locks the ball
+        if(S.ball){const prev=S.target||S.ball;S.target=S.ball;measure(mtMs,prev,S.target);}
+      }else{                                                  // speed metric locks the top player
+        if(!S.target&&persons.length){const top=persons.reduce((a,b)=>b.score>a.score?b:a);S.target={x:top.x,y:top.y,w:top.w,h:top.h};S.lastT=0;}
         associate(mtMs);
       }
       S.speedSeries.push(S.fitV);if(S.speedSeries.length>1500)S.speedSeries.shift();
@@ -610,10 +733,12 @@ async function analyzePass(){
     S.analyzePct=d?Math.min(1,t/d):1;updateProgress();
     await new Promise(r=>setTimeout(r,0)); // yield so UI/cancel stays responsive
   }
+  for(const tr of S.tracks)if(tr.confirmed)S.trackArchive.push(tr); // flush live tracks for possession
   document.getElementById('bAnalyze').classList.remove('on');
   document.getElementById('aprog').hidden=true;
   if(S.analyzing){
     buildSummary();
+    buildBreakdown();
     try{video.currentTime=0;}catch(e){}
     flash(S.summary.scaleLikelyWrong
       ?'Done — but speeds exceed a real lacrosse shot. <span class="k">Re-tap Set Scale</span> across a wide known distance.'
@@ -684,6 +809,82 @@ function drawSparkline(){
   x.beginPath();for(let i=0;i<s.length;i++){const px=X(i),py=Y(s[i]);i?x.lineTo(px,py):x.moveTo(px,py);}
   x.lineWidth=2*DPR;x.strokeStyle='#c8ff32';x.stroke();
 }
+/* ===== play breakdown card + provider-agnostic narrator (free local default) ===== */
+const NARR_DEFAULTS={provider:'local',endpoint:'',model:'gpt-4o-mini',timeoutMs:8000};
+function narratorCfg(){
+  let cfg={...NARR_DEFAULTS};
+  try{const j=localStorage.getItem('zenith_narrator');if(j)cfg={...cfg,...JSON.parse(j)};}catch(e){}
+  if(window.ZENITH_CFG&&typeof window.ZENITH_CFG==='object')cfg={...cfg,...window.ZENITH_CFG};
+  if(cfg.provider==='worker'&&!cfg.endpoint)cfg.provider='local';
+  return cfg;
+}
+function setNarrator(patch){try{localStorage.setItem('zenith_narrator',JSON.stringify({...narratorCfg(),...patch}));}catch(e){}}
+async function narrate(b){
+  const cfg=narratorCfg();
+  if(cfg.provider==='worker'){
+    try{const ctrl=new AbortController(),to=setTimeout(()=>ctrl.abort(),cfg.timeoutMs||8000);
+      const res=await fetch(cfg.endpoint,{method:'POST',headers:{'Content-Type':'application/json'},signal:ctrl.signal,
+        body:JSON.stringify({events:b.events,meta:b.meta,model:cfg.model})});clearTimeout(to);
+      if(res.ok){const data=await res.json();if(data&&typeof data.text==='string'&&data.text.trim())return data.text.trim();}
+    }catch(e){}
+  }
+  return narrateLocal(b);
+}
+function narrateLocal(b){
+  const e=b.events||{},parts=[];
+  try{
+    if(e.faceoff)parts.push('The face-off went to Player '+e.faceoff.player+'.');
+    if(e.possession&&e.possession.length)
+      parts.push(e.possession.slice(0,2).map(p=>'P'+p.player+' held it '+p.seconds.toFixed(1)+'s').join(' and ')+'.');
+    if(typeof e.passes==='number'&&e.passes>0)parts.push(e.passes+' pass'+(e.passes>1?'es':'')+' moved the ball.');
+    if(e.topBall&&e.topBall.speed>0)parts.push('Fastest ball clocked '+e.topBall.speed+' '+e.topBall.unit+'.');
+    if(typeof e.players==='number'&&e.players>0)parts.push(e.players+' player'+(e.players>1?'s':'')+' on screen.');
+  }catch(err){}
+  if(!parts.length)return 'Clip analyzed — not enough clean motion to break down a play yet.';
+  let s=parts.join(' ');
+  if(b.meta&&b.meta.confidence&&b.meta.confidence!=='HIGH')s+=' ('+(b.meta.confidence==='LOW'?'rough read':'approximate')+'.)';
+  return s;
+}
+function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function buildBreakdown(){
+  if(!S.summary)return;
+  const s=S.summary,isBall=S.mode==='ball',u=unitLabel(),fmtV=ms=>+conv(ms).toFixed(1);
+  let pb={players:0,possession:[],passes:0,faceoff:null};
+  try{pb=buildPlayBreakdown();}catch(e){}
+  // headline player count = robust per-frame median (s.players), NOT distinct track ids:
+  // in a scrum COCO drops/re-finds players so track ids inflate (the "27 players" artifact).
+  const ev={players:s.players||0};
+  if(!s.scaleLikelyWrong&&s.calibrated&&s.peakMs>0){
+    if(isBall)ev.topBall={speed:fmtV(s.peakMs),unit:u};else ev.topSpeed={speed:fmtV(s.peakMs),unit:u};}
+  if(pb.faceoff)ev.faceoff=pb.faceoff;
+  if(pb.possession&&pb.possession.length)ev.possession=pb.possession;
+  if(typeof pb.passes==='number')ev.passes=pb.passes;
+  const meta={confidence:(s.scaleLikelyWrong||!s.calibrated)?'LOW':s.quality.label,calibrated:s.calibrated,scaleSuspect:s.scaleLikelyWrong,mode:S.mode};
+  const rows=[];
+  if(ev.faceoff)rows.push({k:'Face-off',v:'Player '+ev.faceoff.player,hot:true});
+  if(ev.possession&&ev.possession.length)rows.push({k:'Possession',v:ev.possession.slice(0,3).map(p=>'P'+p.player+' <em>'+p.seconds.toFixed(1)+'s</em>').join(' · '),html:true});
+  if(typeof ev.passes==='number')rows.push({k:'Passes',v:String(ev.passes)});
+  if(ev.topBall)rows.push({k:'Top ball',v:ev.topBall.speed+' '+ev.topBall.unit,hot:true});
+  if(ev.topSpeed)rows.push({k:'Top speed',v:ev.topSpeed.speed+' '+ev.topSpeed.unit,hot:true});
+  rows.push({k:'Players',v:String(ev.players)});
+  if(!s.calibrated)rows.push({k:'Scale',v:'<em>auto/none</em>',html:true});
+  S.breakdown={events:ev,rows,meta};
+  renderBreakdown(S.breakdown);
+}
+function renderBreakdown(b){
+  const badge=document.getElementById('bdConf');
+  badge.textContent=b.meta.confidence;badge.className='conf '+b.meta.confidence.toLowerCase();
+  document.getElementById('bdEvents').innerHTML=b.rows.map(r=>{
+    const val=r.html?r.v:escapeHtml(r.v);
+    return '<div class="bd-ev'+(r.hot?' hot':'')+'"><span class="k">'+escapeHtml(r.k)+'</span><span class="v">'+val+'</span></div>';
+  }).join('');
+  const np=document.getElementById('bdNarrText');np.className='muted';np.textContent='composing recap…';
+  document.getElementById('summaryCard').classList.remove('show'); // richer breakdown replaces the bare summary
+  document.getElementById('breakdownCard').classList.add('show');
+  const token=(S._narrToken=(S._narrToken||0)+1);
+  narrate(b).then(text=>{if(token!==S._narrToken)return;np.className='';np.textContent=text;})
+    .catch(()=>{if(token!==S._narrToken)return;np.className='';np.textContent=narrateLocal(b);});
+}
 
 /* ----- motion-assisted ball tracking (file analysis only) ----- */
 const DIFF_T=22,FRAMEDIFF_T=18,BG_ALPHA=0.05;
@@ -728,15 +929,17 @@ function connectedComponents(mask,W,H){
   }
   return blobs;
 }
-async function ballAnalyzeFrame(mtMs){
+async function ballAnalyzeFrame(mtMs,opts){
+  opts=opts||{};const shared=opts.sharedPreds;
   const img=actx.getImageData(0,0,AW,AH).data;
   const gray=toGray(img);
   if(ballBg&&ballBg.length!==gray.length)resetBallTracker(); // geometry changed mid-pass → reseed
   let preds=null;
-  if(ballFrame%3===0){try{preds=await model.detect(adet,20,0.2);}catch(e){preds=[];}}
+  if(shared)preds=shared;                                    // breakdown: reuse the frame's detect
+  else if(ballFrame%3===0){try{preds=await model.detect(adet,20,0.2);}catch(e){preds=[];}}
   ballFrame++;
-  if(preds)countPersons(preds);
-  if(!ballBg){ballBg=gray.slice();ballPrev=gray;S.dets=[];return;}
+  if(preds&&!shared)countPersons(preds);                     // persons already counted by dedupPersons
+  if(!ballBg){ballBg=gray.slice();ballPrev=gray;if(!shared)S.dets=[];S.ball=null;return;}
   const mask=new Uint8Array(AW*AH);
   for(let i=0;i<gray.length;i++){
     if(Math.abs(gray[i]-ballBg[i])>DIFF_T&&Math.abs(gray[i]-ballPrev[i])>FRAMEDIFF_T)mask[i]=1;
@@ -773,10 +976,9 @@ async function ballAnalyzeFrame(mtMs){
   if(trk){
     const sx=CW/AW,sy=CH/AH;
     const pt={x:trk.x*sx,y:trk.y*sy,w:Math.max(10,trk.w)*sx,h:Math.max(10,trk.h)*sy,score:trk.conf};
-    S.dets=[pt];
-    if(!S.target){S.target={x:pt.x,y:pt.y,w:pt.w,h:pt.h};S.lastT=0;}
-    associate(mtMs);
-  }else{S.dets=[];if(++S.lost>14)S.searching=true;}
+    S.ball=pt;
+    if(!shared){S.dets=[pt];if(!S.target){S.target={x:pt.x,y:pt.y,w:pt.w,h:pt.h};S.lastT=0;}associate(mtMs);}
+  }else{S.ball=null;if(!shared){S.dets=[];if(++S.lost>14)S.searching=true;}}
   for(let i=0;i<gray.length;i++)ballBg[i]+=BG_ALPHA*(gray[i]-ballBg[i]);
   ballPrev=gray;
 }
@@ -821,6 +1023,7 @@ function newClip(){
   try{video.removeAttribute('src');video.load();}catch(e){}
   resetTrajectory();resetBallTracker();S.speedSeries=[];S.summary=null;S.maxPersons=0;S.lost=0;
   if(S.autoScale){S.ppm=null;S.autoScale=false;}updateScaleReadout(); // re-auto-scale for the next clip
+  S.breakdown=null;document.getElementById('breakdownCard').classList.remove('show');
   document.getElementById('summaryCard').classList.remove('show');
   document.getElementById('aprog').hidden=true;document.getElementById('bAnalyze').classList.remove('on');
   document.getElementById('bPlay').textContent='▶';
@@ -1008,10 +1211,12 @@ document.getElementById('bUnit').onclick=function(){
   const l=unitLabel();
   this.textContent=l;document.getElementById('spdUnit').textContent=l;renderPlays();
   if(S.summary){renderSummary();drawSparkline();}
+  if(S.breakdown){buildBreakdown();}
 };
 document.getElementById('bReset').onclick=()=>{
-  resetTrajectory();resetBallTracker();S.speedSeries=[];S.summary=null;S.lost=0;
+  resetTrajectory();resetBallTracker();S.speedSeries=[];S.summary=null;S.breakdown=null;S.lost=0;
   document.getElementById('summaryCard').classList.remove('show');
+  document.getElementById('breakdownCard').classList.remove('show');
   setMode(S.source==='file'?'FILE':'STANDBY');
   spd.textContent='0.0';peak.textContent='0.0';mx.textContent='0.0';dist.textContent='0';clk.textContent='0.0';
   flash('Reset',1000);
