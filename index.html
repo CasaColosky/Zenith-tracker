@@ -8,6 +8,7 @@
   :root{
     --bg:#07090c; --ink:#e8f0f2; --dim:#6b7780;
     --accent:#c8ff32; --accent2:#19e0ff; --warn:#ff5d4a;
+    --teamA:#ff9d3c; --teamB:#8f7bff; --teamN:#8a97a0;
     --panel:rgba(10,14,18,.82); --line:rgba(200,255,50,.18);
     --mono:ui-monospace,"SF Mono","Cascadia Mono","Roboto Mono",Menlo,Consolas,monospace;
     --sans:"Helvetica Neue",Arial,system-ui,sans-serif;
@@ -115,6 +116,12 @@
   .pl.row .pmeta{font-size:9px;color:var(--accent2);letter-spacing:.06em;text-align:right;line-height:1.5}
   .pl.row.sel{border-left:2px solid var(--accent);margin-left:-10px;padding-left:8px;background:rgba(200,255,50,.06)}
   .pl.row.sel b{color:var(--accent)}
+  .pl.row{position:relative}
+  .pl.row .tbar{position:absolute;left:-10px;top:3px;bottom:3px;width:3px;border-radius:2px}
+  .pl.row.sel .tbar{display:none}
+  .tdot{display:inline-block;width:7px;height:7px;border-radius:50%;vertical-align:middle;margin-right:5px}
+  #teamLegend{display:flex;gap:12px;margin:2px 0 6px;font-family:var(--mono);font-size:8px;letter-spacing:.12em;color:var(--dim);text-transform:uppercase}
+  #teamLegend span{display:flex;align-items:center}#teamLegend .tdot{margin-right:4px}
   .pcard .mini{margin-bottom:8px}
   .pcard .val{font-size:18px}
   .pback{font-family:var(--mono);font-size:14px;line-height:1;background:transparent;border:1px solid var(--line);
@@ -219,6 +226,7 @@
   </div>
 
   <div class="plays players" id="playersPanel"><h4>Players <span class="pcount" id="plCount"></span></h4>
+    <div id="teamLegend"></div>
     <div id="playerList" class="empty">Analyze a clip first</div></div>
 
   <div class="breakdown pcard" id="playerCard">
@@ -231,7 +239,7 @@
       <div class="readout"><div class="lbl">Dist m</div><span class="val" id="pcDist">0</span></div>
       <div class="readout"><div class="lbl">Poss s</div><span class="val" id="pcPoss">0.0</span></div>
     </div>
-    <div class="srange">Time on screen <span id="pcTime">0.0</span>s · tap a player on the video or roster</div>
+    <div class="srange"><span class="tdot" id="pcTeamDot" style="background:transparent"></span><span id="pcTeam"></span> · Time on screen <span id="pcTime">0.0</span>s · tap a player on the video or roster</div>
   </div>
 
   <div class="calsheet" id="calSheet">
@@ -333,6 +341,7 @@ const S={
   win:[], fitV:0, clampHits:0, clampTotal:0, trackValid:0, trackTotal:0, quality:null,
   tracks:[], nextTrackId:1, trackArchive:[], ball:null, ballTrack:[], breakdown:null, _narrToken:0,
   selectedPlayer:null, players:[], showPlayers:true,
+  teams:{}, teamLabels:{}, teamsUnclear:true, teamConf:'LOW', teamFilter:'all',
   lastT:0, startT:0, maxV:0, distM:0, smoothV:0, unit:'mph',
   trail:[], showTrail:false, showHeat:false, heat:null, HX:48, HY:0,
   recording:false, peakV:0, playDist:0, playStart:0, plays:[]
@@ -344,6 +353,11 @@ const TYP={ball:[15,50],player:[2,11]};  // m/s plausible band (confidence only)
 const OVER_FRAC_FLAG=0.15;               // >15% of samples over ceiling ⇒ scale is wrong
 // multi-object (player) tracking — SORT-style, geometry-only, no appearance model
 const MOT_GATE_FRAC=0.10, MOT_VEL_K=0.6, MOT_IOU_MIN=0.20, MOT_SIZE_RATIO=2.2, MOT_MAX_COAST=6, CONFIRM_HITS=3, MOT_MAX_TRACKS=12;
+const MOT_COLOR_W=25, MOT_GREY_SAT=0.18;
+const TEAM={A:{tag:'A',label:'White',col:'#ff9d3c'},B:{tag:'B',label:'Dark',col:'#8f7bff'},neutral:{tag:'·',label:'—',col:'#8a97a0'}};
+const teamOf=id=>S.teams[id]||'neutral';
+const teamCol=id=>TEAM[teamOf(id)].col;
+const teamLabelOf=id=>{const t=teamOf(id);return (S.teamLabels&&S.teamLabels[t])||TEAM[t].label;};
 // calibration
 const MIN_SPAN_FRAC=0.08;                // reject calibration taps closer than 8% of frame width
 const CAL_PRESETS=[
@@ -531,7 +545,7 @@ function resetTrajectory(){
   S.target=null;S.searching=false;S.maxV=0;S.distM=0;S.smoothV=0;S.fitV=0;S.peakV=0;S.lastT=0;S.startT=0;
   S.trail=[];S.fitSamples=[];S.win=[];S.clampHits=0;S.clampTotal=0;S.trackValid=0;S.trackTotal=0;
   S.tracks=[];S.nextTrackId=1;S.trackArchive=[];S.ball=null;S.ballTrack=[];
-  S.selectedPlayer=null;S.players=[];
+  S.selectedPlayer=null;S.players=[];S.teams={};S.teamLabels={};S.teamsUnclear=true;S.teamConf='LOW';
   if(S.heat)S.heat.fill(0);
 }
 function hidePlayerUI(){
@@ -632,7 +646,66 @@ async function autoCalibrate(d){
   return heights[heights.length>>1]/1.8; // px per metre
 }
 /* ===== multi-player tracking (SORT-style, geometry-only) ===== */
-function dedupPersons(preds){ // dedup person boxes (IoU-NMS) → centre boxes in view coords; also feeds personCounts
+/* ===== jersey-color descriptor + team clustering ===== */
+function hexA(hex,a){const n=parseInt(hex.slice(1),16);return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')';}
+function rgb2hsv(r,g,b){r/=255;g/=255;b/=255;const mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn;let h=0;
+  if(d){if(mx===r)h=((g-b)/d)%6;else if(mx===g)h=(b-r)/d+2;else h=(r-g)/d+4;h*=60;if(h<0)h+=360;}
+  return {h,s:mx?d/mx:0,v:mx};}
+function torsoDescriptor(img,bbox){ // sample chest band on a fixed 6x8 grid (size-robust)
+  const bx=bbox[0],by=bbox[1],bw=bbox[2],bh=bbox[3];if(bw<10||bh<24)return null;
+  const tx=bx+0.30*bw,tw=0.40*bw,ty=by+0.18*bh,th=0.32*bh,GX=6,GY=8;
+  let sumSin=0,sumCos=0,sS=0,sV=0,n=0;const hist=new Float32Array(12);
+  for(let gy=0;gy<GY;gy++)for(let gx=0;gx<GX;gx++){
+    let px=Math.round(tx+(gx+0.5)/GX*tw),py=Math.round(ty+(gy+0.5)/GY*th);
+    px=px<0?0:px>=AW?AW-1:px;py=py<0?0:py>=AH?AH-1:py;
+    const i=(py*AW+px)*4,c=rgb2hsv(img[i],img[i+1],img[i+2]),wt=c.s;
+    sumSin+=Math.sin(c.h*Math.PI/180)*wt;sumCos+=Math.cos(c.h*Math.PI/180)*wt;sS+=c.s;sV+=c.v;hist[Math.floor(c.h/30)%12]+=wt;n++;}
+  if(!n)return null;
+  let h=Math.atan2(sumSin,sumCos)*180/Math.PI;if(h<0)h+=360;
+  let hs=0;for(let i=0;i<12;i++)hs+=hist[i];if(hs>0)for(let i=0;i<12;i++)hist[i]/=hs;
+  const s=sS/n,v=sV/n;return {h,s,v,sat:s,lum:v,hist};}
+function colorDist(a,b){
+  if(a.sat<MOT_GREY_SAT||b.sat<MOT_GREY_SAT)return Math.min(1,0.5*Math.abs(a.v-b.v)+0.5*Math.abs(a.s-b.s));
+  let dh=Math.abs(a.h-b.h);if(dh>180)dh=360-dh;
+  let histD=0;for(let i=0;i<12;i++)histD+=Math.abs(a.hist[i]-b.hist[i]);
+  return Math.min(1,0.6*(dh/180)+0.3*0.5*histD+0.1*Math.abs(a.s-b.s));}
+function cloneDesc(d){return d?{h:d.h,s:d.s,v:d.v,sat:d.sat,lum:d.lum,hist:Float32Array.from(d.hist)}:null;}
+function circMix(h0,h1,a){const s=Math.sin(h0*Math.PI/180)*(1-a)+Math.sin(h1*Math.PI/180)*a,c=Math.cos(h0*Math.PI/180)*(1-a)+Math.cos(h1*Math.PI/180)*a;let h=Math.atan2(s,c)*180/Math.PI;return h<0?h+360:h;}
+function emaDesc(tr,d,a){tr.h=circMix(tr.h,d.h,a);tr.s+=a*(d.s-tr.s);tr.v+=a*(d.v-tr.v);tr.sat+=a*(d.sat-tr.sat);tr.lum=tr.v;for(let i=0;i<12;i++)tr.hist[i]+=a*(d.hist[i]-tr.hist[i]);}
+function hueToName(h){const t=[[15,'Red'],[45,'Orange'],[70,'Yellow'],[160,'Green'],[200,'Cyan'],[265,'Blue'],[300,'Purple'],[340,'Pink']];for(const[l,nm]of t)if(h<l)return nm;return 'Red';}
+function hueDist(a,b){let d=Math.abs(a-b);return d>180?360-d:d;}
+// cluster confirmed tracks into 2 teams by jersey color: luminance split first (light vs dark),
+// hue 2-means fallback, else 'teams unclear' → app stays in plain per-player mode.
+function buildTeamModel(){
+  S.teams={};S.teamLabels={};S.teamsUnclear=true;S.teamConf='LOW';
+  const cands=S.trackArchive.filter(t=>t.confirmed&&t.desc&&t.samples&&t.samples.length>=CONFIRM_HITS);
+  if(cands.length<4)return;
+  // PATH A — luminance (1-D 2-means)
+  const lv=cands.map(c=>c.desc.v);let c0=Math.min(...lv),c1=Math.max(...lv);
+  for(let it=0;it<20;it++){const A=[],B=[];for(const v of lv)(Math.abs(v-c0)<=Math.abs(v-c1)?A:B).push(v);
+    if(!A.length||!B.length)break;const n0=A.reduce((x,y)=>x+y,0)/A.length,n1=B.reduce((x,y)=>x+y,0)/B.length;if(Math.abs(n0-c0)<1e-4&&Math.abs(n1-c1)<1e-4){c0=n0;c1=n1;break;}c0=n0;c1=n1;}
+  const lo=Math.min(c0,c1),hi=Math.max(c0,c1),gap=hi-lo;
+  const hiSet=cands.filter(c=>Math.abs(c.desc.v-hi)<Math.abs(c.desc.v-lo)),loSet=cands.filter(c=>!(Math.abs(c.desc.v-hi)<Math.abs(c.desc.v-lo)));
+  const bal=Math.min(hiSet.length,loSet.length)/Math.max(hiSet.length,loSet.length);
+  const sp=(arr,c)=>arr.length?arr.reduce((s,x)=>s+Math.abs(x.desc.v-c),0)/arr.length:0;
+  const sil=gap/((sp(hiSet,hi)+sp(loSet,lo))/2+1e-6);
+  if(gap>=0.22&&bal>=0.30&&sil>=1.4){
+    for(const c of hiSet)S.teams[c.id]='A';for(const c of loSet)S.teams[c.id]='B';
+    S.teamLabels={A:'White',B:'Dark'};S.teamsUnclear=false;S.teamConf=(bal>=0.5&&sil>=2&&!S.autoScale)?'HIGH':'MED';return;}
+  // PATH B — hue 2-means on saturated tracks
+  const col=cands.filter(c=>c.desc.s>=0.18&&c.desc.v>=0.15);
+  if(col.length>=4){
+    let s0=col[0].desc.h,s1=col[1].desc.h,bd=-1;
+    for(let i=0;i<col.length;i++)for(let j=i+1;j<col.length;j++){const d=hueDist(col[i].desc.h,col[j].desc.h);if(d>bd){bd=d;s0=col[i].desc.h;s1=col[j].desc.h;}}
+    let h0=s0,h1=s1;
+    for(let it=0;it<20;it++){const A=[],B=[];for(const c of col)(hueDist(c.desc.h,h0)<=hueDist(c.desc.h,h1)?A:B).push(c);
+      if(!A.length||!B.length)break;const cm=arr=>{let ss=0,cc=0;for(const x of arr){ss+=Math.sin(x.desc.h*Math.PI/180);cc+=Math.cos(x.desc.h*Math.PI/180);}let h=Math.atan2(ss,cc)*180/Math.PI;return h<0?h+360:h;};h0=cm(A);h1=cm(B);}
+    const A=col.filter(c=>hueDist(c.desc.h,h0)<=hueDist(c.desc.h,h1)),B=col.filter(c=>!(hueDist(c.desc.h,h0)<=hueDist(c.desc.h,h1)));
+    const hgap=hueDist(h0,h1),hbal=Math.min(A.length,B.length)/Math.max(A.length,B.length);
+    if(hgap>=40&&hbal>=0.30){for(const c of A)S.teams[c.id]='A';for(const c of B)S.teams[c.id]='B';
+      S.teamLabels={A:hueToName(h0),B:hueToName(h1)};S.teamsUnclear=false;S.teamConf='MED';return;}}
+}
+function dedupPersons(preds,img){ // dedup person boxes (IoU-NMS) → centre boxes in view coords; also feeds personCounts; img→jersey color
   const sx=CW/AW,sy=CH/AH;
   const ps=preds.filter(p=>p.class==='person'&&p.score>=0.5).sort((a,b)=>b.score-a.score),kept=[];
   for(const p of ps){const[x,y,w,h]=p.bbox;let dup=false;
@@ -641,7 +714,7 @@ function dedupPersons(preds){ // dedup person boxes (IoU-NMS) → centre boxes i
       const inter=ix*iy,uni=w*h+W2*H2-inter;if(uni>0&&inter/uni>0.5){dup=true;break;}}
     if(!dup)kept.push(p);}
   S.personCounts.push(kept.length);if(kept.length>S.maxPersons)S.maxPersons=kept.length;
-  return kept.map(p=>{const w=p.bbox[2]*sx,h=p.bbox[3]*sy;return{x:p.bbox[0]*sx+w/2,y:p.bbox[1]*sy+h/2,w,h,score:p.score};});
+  return kept.map(p=>{const desc=img?torsoDescriptor(img,p.bbox):null;const w=p.bbox[2]*sx,h=p.bbox[3]*sy;return{x:p.bbox[0]*sx+w/2,y:p.bbox[1]*sy+h/2,w,h,score:p.score,desc};});
 }
 function iouBox(a,b){
   const ax=a.x-a.w/2,ay=a.y-a.h/2,bx=b.x-b.w/2,by=b.y-b.h/2;
@@ -659,7 +732,7 @@ function trackPersons(dets,mt){
       if(dist>Math.max(gate,gateBase)||sr>MOT_SIZE_RATIO)continue;
       const ov=iouBox({x:tr.px,y:tr.py,w:tr.w,h:tr.h},d);
       if(dist>gateBase&&ov<MOT_IOU_MIN)continue;
-      pairs.push({ti,di,cost:dist-60*ov});}}
+      let cost=dist-60*ov;if(tr.desc&&d.desc)cost+=MOT_COLOR_W*(1-ov)*colorDist(tr.desc,d.desc);pairs.push({ti,di,cost});}}
   pairs.sort((a,b)=>a.cost-b.cost);
   const usedT=new Set(),usedD=new Set();
   for(const p of pairs){if(usedT.has(p.ti)||usedD.has(p.di))continue;usedT.add(p.ti);usedD.add(p.di);updateTrack(S.tracks[p.ti],dets[p.di],mt);}
@@ -672,7 +745,7 @@ function trackPersons(dets,mt){
   const fresh=[];for(let di=0;di<dets.length;di++)if(!usedD.has(di))fresh.push(dets[di]);
   fresh.sort((a,b)=>b.score-a.score);
   for(const d of fresh){if(S.tracks.length>=MOT_MAX_TRACKS)break;
-    S.tracks.push({id:S.nextTrackId++,x:d.x,y:d.y,w:d.w,h:d.h,vx:0,vy:0,samples:[{t:mt,x:d.x,y:d.y,w:d.w,h:d.h}],lastSeen:mt,hits:1,age:1,coast:0,confirmed:false});}
+    S.tracks.push({id:S.nextTrackId++,x:d.x,y:d.y,w:d.w,h:d.h,vx:0,vy:0,desc:cloneDesc(d.desc),samples:[{t:mt,x:d.x,y:d.y,w:d.w,h:d.h}],lastSeen:mt,hits:1,age:1,coast:0,confirmed:false});}
 }
 function updateTrack(tr,d,mt){
   const last=tr.samples[tr.samples.length-1],dt=Math.max(1e-3,mt-last.t),k=0.5;
@@ -680,6 +753,7 @@ function updateTrack(tr,d,mt){
   tr.vx+=0.5*((d.x-last.x)/dt-tr.vx);tr.vy+=0.5*((d.y-last.y)/dt-tr.vy);
   tr.x=nx;tr.y=ny;tr.w=d.w;tr.h=d.h;tr.coast=0;tr.age++;tr.hits++;tr.lastSeen=mt;
   if(tr.hits>=CONFIRM_HITS)tr.confirmed=true;
+  if(d.desc){if(!tr.desc)tr.desc=cloneDesc(d.desc);else emaDesc(tr.desc,d.desc,0.3);}
   tr.samples.push({t:mt,x:nx,y:ny,w:d.w,h:d.h});if(tr.samples.length>600)tr.samples.shift();
 }
 /* ===== possession + events from ball track + player tracks (free, deterministic) ===== */
@@ -722,6 +796,13 @@ function buildPlayBreakdown(){
     const nearC=early.filter(b=>Math.hypot(b.x-cx,b.y-cy)<0.2*CW).length;
     if(early.length&&nearC>=Math.max(2,early.length*0.4))ev.faceoff={player:intervals[0].playerId};}
   ev.intervals=intervals; // expose for per-player possession/touches
+  if(S.teams&&!S.teamsUnclear){ // team-aware: face-off team + possession split
+    const lbl=t=>(S.teamLabels&&S.teamLabels[t])||TEAM[t].label;
+    if(ev.faceoff){const ft=teamOf(ev.faceoff.player);if(ft==='A'||ft==='B')ev.faceoffTeam=lbl(ft);}
+    const sec={A:0,B:0};for(const iv of intervals){const t=teamOf(iv.playerId);if(sec[t]!=null)sec[t]+=(iv.tEnd-iv.tStart);}
+    const tot=sec.A+sec.B;
+    if(tot>0)ev.teamPossession=[{label:lbl('A'),pct:Math.round(sec.A/tot*100)},{label:lbl('B'),pct:Math.round(sec.B/tot*100)}];
+  }
   return ev;
 }
 /* ===== per-player stats + on-video markers (individual-player interactivity) ===== */
@@ -758,7 +839,7 @@ function buildPlayerStats(){
     let distM=0;
     if(S.ppm)for(let i=1;i<s.length;i++){const a=s[i-1],b=s[i],dt=Math.max(1e-3,b.t-a.t),m=Math.hypot(b.x-a.x,b.y-a.y)/S.ppm,v=m/dt;if(v>0.05&&v<=ceil)distM+=m;}
     const q=trackQuality(tr,{validW,totalW,nOk:fit.length,peak:topMs});
-    out.push({id:tr.id,topMs,distM,possSec:possBy[tr.id]||0,touches:touchBy[tr.id]||0,screenSec,conf:q.label,reasons:q.reasons});
+    out.push({id:tr.id,team:teamOf(tr.id),topMs,distM,possSec:possBy[tr.id]||0,touches:touchBy[tr.id]||0,screenSec,conf:q.label,reasons:q.reasons});
   }
   out.sort((a,b)=>S.ppm?(b.topMs-a.topMs):(b.screenSec-a.screenSec));
   S.players=out;return out;
@@ -775,14 +856,16 @@ function buildPlayerMarkers(){
 function drawPlayers(){
   const ms=buildPlayerMarkers();if(!ms.length)return;
   ctx.save();ctx.font=`700 ${11*DPR}px ui-monospace,Menlo,monospace`;ctx.textBaseline='middle';
+  const teamsOn=!S.teamsUnclear;
   for(const m of ms){
-    const sel=m.sel,col=sel?'#c8ff32':(m.confirmed?'#19e0ff':'rgba(25,224,255,.45)');
+    const sel=m.sel,tc=teamsOn?teamCol(m.id):'#19e0ff';
+    const col=sel?'#c8ff32':(m.confirmed?tc:hexA(tc,.45));
     const bw=Math.max(14*DPR,m.w),bh=Math.max(28*DPR,m.h),bx=m.x-bw/2,by=m.y-bh/2;
     ctx.globalAlpha=sel?1:(m.confirmed?.85:.5);ctx.lineWidth=(sel?2.5:1.5)*DPR;ctx.strokeStyle=col;
     ctx.setLineDash(sel?[]:[5*DPR,4*DPR]);ctx.strokeRect(bx,by,bw,bh);ctx.setLineDash([]);
-    const lab='P'+m.id,tw=ctx.measureText(lab).width+8*DPR;
+    const lab='P'+m.id+(teamsOn&&teamOf(m.id)!=='neutral'?' '+TEAM[teamOf(m.id)].tag:''),tw=ctx.measureText(lab).width+8*DPR;
     ctx.fillStyle='rgba(7,9,12,.78)';ctx.fillRect(bx,by-15*DPR,tw,14*DPR);
-    ctx.fillStyle=col;ctx.fillText(lab,bx+4*DPR,by-8*DPR);
+    ctx.fillStyle=sel?'#c8ff32':tc;ctx.fillText(lab,bx+4*DPR,by-8*DPR);
     ctx.beginPath();ctx.arc(m.x,m.y,(sel?3.5:2.2)*DPR,0,7);ctx.fillStyle=col;ctx.fill();
   }
   ctx.globalAlpha=1;ctx.restore();
@@ -797,12 +880,23 @@ function selectPlayer(id){
 }
 function clearPlayerSelection(){S.selectedPlayer=null;document.getElementById('playerCard').classList.remove('show');renderPlayerList();
   if(S.breakdown)document.getElementById('breakdownCard').classList.add('show');else if(S.summary)document.getElementById('summaryCard').classList.add('show');}
-function fmtPlayerRow(p){const sp=S.ppm?conv(p.topMs).toFixed(1)+' '+S.unit:'—';
-  return '<div class="pl row'+(p.id===S.selectedPlayer?' sel':'')+'" data-pid="'+p.id+'"><span><b>P'+p.id+'</b></span><span class="pmeta">'+sp+'<br>'+p.touches+' touch · '+p.possSec.toFixed(1)+'s</span></div>';}
+function fmtPlayerRow(p){const sp=S.ppm?conv(p.topMs).toFixed(1)+' '+S.unit:'—';const tc=teamCol(p.id);
+  return '<div class="pl row'+(p.id===S.selectedPlayer?' sel':'')+'" data-pid="'+p.id+'">'
+    +'<span class="tbar" style="background:'+tc+'"></span>'
+    +'<span><span class="tdot" style="background:'+tc+'"></span><b>P'+p.id+'</b></span>'
+    +'<span class="pmeta">'+sp+'<br>'+p.touches+' touch · '+p.possSec.toFixed(1)+'s</span></div>';}
+function renderTeamLegend(){
+  const el=document.getElementById('teamLegend');if(!el)return;
+  if(S.teamsUnclear){el.innerHTML='';return;}
+  const cnt={A:0,B:0};for(const p of (S.players||[])){if(cnt[p.team]!=null)cnt[p.team]++;}
+  const lbl=t=>(S.teamLabels&&S.teamLabels[t])||TEAM[t].label;
+  el.innerHTML=['A','B'].map(t=>'<span><i class="tdot" style="background:'+TEAM[t].col+'"></i>'+lbl(t)+' '+cnt[t]+'</span>').join('');
+}
 function renderPlayerList(){
   const el=document.getElementById('playerList');if(!el)return;
   const ps=(S.players||[]).slice().sort((a,b)=>S.ppm?(b.topMs-a.topMs):(b.screenSec-a.screenSec));
   const c=document.getElementById('plCount');if(c)c.textContent=ps.length?ps.length+' tracked':'';
+  renderTeamLegend();
   if(!ps.length){el.className='empty';el.textContent='Analyze a clip first';return;}
   el.className='';el.innerHTML=ps.map(fmtPlayerRow).join('');
   el.querySelectorAll('.pl.row').forEach(r=>r.onclick=()=>selectPlayer(+r.dataset.pid));
@@ -818,6 +912,8 @@ function renderPlayerCard(){
   document.getElementById('pcPoss').textContent=p.possSec.toFixed(1);
   document.getElementById('pcTime').textContent=p.screenSec.toFixed(1);
   const badge=document.getElementById('pcConf');badge.textContent=p.conf;badge.className='conf '+String(p.conf).toLowerCase();
+  const td=document.getElementById('pcTeamDot'),tn=document.getElementById('pcTeam');
+  if(td&&tn){const on=!S.teamsUnclear&&p.team!=='neutral';td.style.background=on?teamCol(p.id):'transparent';tn.textContent=on?teamLabelOf(p.id):'';}
   document.getElementById('breakdownCard').classList.remove('show');
   document.getElementById('summaryCard').classList.remove('show');
   document.getElementById('playerCard').classList.add('show');
@@ -856,9 +952,10 @@ async function analyzePass(){
         const mtMs=mt*1000;
         actx.drawImage(video,cover.dx*AW/CW,cover.dy*AH/CH,cover.dw*AW/CW,cover.dh*AH/CH);
         let preds=[];try{preds=await model.detect(adet,20,0.25);}catch(e){}
-        const persons=dedupPersons(preds);
-        trackPersons(persons,mt);                             // persistent player ids
-        await ballAnalyzeFrame(mtMs,{sharedPreds:preds});     // sets S.ball; doesn't own S.dets/measure
+        const frameImg=actx.getImageData(0,0,AW,AH).data;     // ONE read, shared by color + ball motion
+        const persons=dedupPersons(preds,frameImg);           // attaches jersey-color descriptor
+        trackPersons(persons,mt);                             // persistent player ids (color-aware)
+        await ballAnalyzeFrame(mtMs,{sharedPreds:preds,sharedImg:frameImg}); // sets S.ball; reuses frameImg
         if(S.ball)S.ballTrack.push({t:mt,x:S.ball.x,y:S.ball.y});
         S.dets=persons;
         if(S.mode==='ball'){                                  // speed metric locks the ball
@@ -874,6 +971,7 @@ async function analyzePass(){
       await new Promise(r=>setTimeout(r,0)); // yield so the UI stays responsive
     }
     for(const tr of S.tracks)if(tr.confirmed&&S.trackArchive.length<60)S.trackArchive.push(tr);
+    try{buildTeamModel();}catch(e){S.teamsUnclear=true;} // cluster tracks into 2 teams by jersey color
     if(S.analyzing){
       buildSummary();buildBreakdown();
       try{buildPlayerStats();}catch(e){S.players=[];}
@@ -1003,12 +1101,16 @@ function buildBreakdown(){
   if(!s.scaleLikelyWrong&&s.calibrated&&s.peakMs>0){
     if(isBall)ev.topBall={speed:fmtV(s.peakMs),unit:u};else ev.topSpeed={speed:fmtV(s.peakMs),unit:u};}
   if(pb.faceoff)ev.faceoff=pb.faceoff;
+  if(pb.faceoffTeam)ev.faceoffTeam=pb.faceoffTeam;
   if(pb.possession&&pb.possession.length)ev.possession=pb.possession;
+  if(pb.teamPossession)ev.teamPossession=pb.teamPossession;
   if(typeof pb.passes==='number')ev.passes=pb.passes;
   const meta={confidence:(s.scaleLikelyWrong||!s.calibrated)?'LOW':s.quality.label,calibrated:s.calibrated,scaleSuspect:s.scaleLikelyWrong,mode:S.mode};
   const rows=[];
-  if(ev.faceoff)rows.push({k:'Face-off',v:'Player '+ev.faceoff.player,hot:true});
-  if(ev.possession&&ev.possession.length)rows.push({k:'Possession',v:ev.possession.slice(0,3).map(p=>'P'+p.player+' <em>'+p.seconds.toFixed(1)+'s</em>').join(' · '),html:true});
+  if(ev.faceoffTeam)rows.push({k:'Face-off',v:ev.faceoffTeam,hot:true});
+  else if(ev.faceoff)rows.push({k:'Face-off',v:'Player '+ev.faceoff.player,hot:true});
+  if(ev.teamPossession)rows.push({k:'Possession',v:ev.teamPossession.map((t,i)=>'<em style="color:'+(i?'var(--teamB)':'var(--teamA)')+'">'+t.label+' '+t.pct+'%</em>').join(' · '),html:true});
+  else if(ev.possession&&ev.possession.length)rows.push({k:'Possession',v:ev.possession.slice(0,3).map(p=>'P'+p.player+' <em>'+p.seconds.toFixed(1)+'s</em>').join(' · '),html:true});
   if(typeof ev.passes==='number')rows.push({k:'Passes',v:String(ev.passes)});
   if(ev.topBall)rows.push({k:'Top ball',v:ev.topBall.speed+' '+ev.topBall.unit,hot:true});
   if(ev.topSpeed)rows.push({k:'Top speed',v:ev.topSpeed.speed+' '+ev.topSpeed.unit,hot:true});
@@ -1077,7 +1179,7 @@ function connectedComponents(mask,W,H){
 }
 async function ballAnalyzeFrame(mtMs,opts){
   opts=opts||{};const shared=opts.sharedPreds;
-  const img=actx.getImageData(0,0,AW,AH).data;
+  const img=opts.sharedImg||actx.getImageData(0,0,AW,AH).data;
   const gray=toGray(img);
   if(ballBg&&ballBg.length!==gray.length)resetBallTracker(); // geometry changed mid-pass → reseed
   let preds=null;
