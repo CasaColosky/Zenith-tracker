@@ -441,7 +441,7 @@ async function detectLoop(){
         return {x:p.bbox[0]*sx+w/2,y:p.bbox[1]*sy+h/2,w,h,score:p.score};
       });
       associate(tCap);
-      if(S.source==='file'&&video.paused)await new Promise(r=>setTimeout(r,200));
+      if(S.source==='file'&&video.paused)await new Promise(r=>setTimeout(r,450)); // ease idle CPU/battery
     }else await new Promise(r=>setTimeout(r,60));
   }
 }
@@ -630,7 +630,7 @@ function trackPersons(dets,mt){
   for(let ti=0;ti<S.tracks.length;ti++){const tr=S.tracks[ti];
     if(usedT.has(ti)){survivors.push(tr);continue;}
     tr.x=tr.px;tr.y=tr.py;tr.coast++;tr.age++;
-    if(tr.coast<=MOT_MAX_COAST)survivors.push(tr);else if(tr.confirmed)S.trackArchive.push(tr);}
+    if(tr.coast<=MOT_MAX_COAST)survivors.push(tr);else if(tr.confirmed&&S.trackArchive.length<60)S.trackArchive.push(tr);}
   S.tracks=survivors;
   const fresh=[];for(let di=0;di<dets.length;di++)if(!usedD.has(di))fresh.push(dets[di]);
   fresh.sort((a,b)=>b.score-a.score);
@@ -690,63 +690,69 @@ async function analyzePass(){
   if(S.analyzing)return;
   if(!model){flash('Model still loading…',1500);return;}
   S.analyzing=true;
-  document.getElementById('bAnalyze').classList.add('on');
-  document.getElementById('aprog').hidden=false;
-  const keep=(S.mode==='player'&&S.target)?{...S.target}:null;
-  resetTrajectory();if(keep)S.target=keep;
-  resetBallTracker();S.maxPersons=0;S.personCounts=[];S.speedSeries=[];S.breakdown=null;
-  document.getElementById('summaryCard').classList.remove('show');
-  document.getElementById('breakdownCard').classList.remove('show');
-  video.pause();
-  const d=isFinite(video.duration)&&video.duration>0?video.duration:await ensureDuration();
-  if(!d){S.analyzing=false;document.getElementById('bAnalyze').classList.remove('on');
-    document.getElementById('aprog').hidden=true;flash('Could not read clip length',2000);return;}
-  if(!S.ppm){ // no manual scale → auto-estimate from player size, zero setup
-    flash('Auto-scaling from players…',1600);
-    const a=await autoCalibrate(d);
-    if(a&&S.analyzing){S.ppm=a;S.autoScale=true;updateScaleReadout();}
-  }
-  // sample cadence is decoupled from source fps: dt comes from each frame's real
-  // media time, so a coarser step stays accurate while cutting seeks (fast on iOS).
-  const step=1/15; // single cadence for the dual (persons + ball) breakdown pass
-  for(let t=0;t<=d+1e-3&&S.analyzing;t+=step){
-    const mt=await seekTo(t);
-    if(!S.analyzing)break; // aborted (New Clip / mode switch) mid-seek
-    if(video.readyState>=2){
-      const mtMs=mt*1000;
-      actx.drawImage(video,cover.dx*AW/CW,cover.dy*AH/CH,cover.dw*AW/CW,cover.dh*AH/CH);
-      // ONE detect per frame feeds both the player MOT and the ball fusion (no double-detect)
-      let preds=[];try{preds=await model.detect(adet,20,0.25);}catch(e){}
-      const persons=dedupPersons(preds);
-      trackPersons(persons,mt);                               // persistent player ids
-      await ballAnalyzeFrame(mtMs,{sharedPreds:preds});       // sets S.ball; doesn't own S.dets/measure
-      if(S.ball)S.ballTrack.push({t:mt,x:S.ball.x,y:S.ball.y});// ball path for possession
-      S.dets=persons;                                         // draw persons as candidates
-      if(S.mode==='ball'){                                    // speed metric locks the ball
-        if(S.ball){const prev=S.target||S.ball;S.target=S.ball;measure(mtMs,prev,S.target);}
-      }else{                                                  // speed metric locks the top player
-        if(!S.target&&persons.length){const top=persons.reduce((a,b)=>b.score>a.score?b:a);S.target={x:top.x,y:top.y,w:top.w,h:top.h};S.lastT=0;}
-        associate(mtMs);
-      }
-      S.speedSeries.push(S.fitV);if(S.speedSeries.length>1500)S.speedSeries.shift();
+  const bA=document.getElementById('bAnalyze'),aP=document.getElementById('aprog');
+  bA.classList.add('on');aP.hidden=false;
+  try{
+    const keep=(S.mode==='player'&&S.target)?{...S.target}:null;
+    resetTrajectory();if(keep)S.target=keep;
+    resetBallTracker();S.maxPersons=0;S.personCounts=[];S.speedSeries=[];S.breakdown=null;
+    document.getElementById('summaryCard').classList.remove('show');
+    document.getElementById('breakdownCard').classList.remove('show');
+    video.pause();
+    const d=isFinite(video.duration)&&video.duration>0?video.duration:await ensureDuration();
+    if(!d){flash('Could not read clip length',2000);return;}
+    if(!S.ppm){ // no manual scale → auto-estimate from player size, zero setup
+      flash('Auto-scaling from players…',1600);
+      const a=await autoCalibrate(d);
+      if(a&&S.analyzing){S.ppm=a;S.autoScale=true;updateScaleReadout();}
     }
-    S.analyzePct=d?Math.min(1,t/d):1;updateProgress();
-    await new Promise(r=>setTimeout(r,0)); // yield so UI/cancel stays responsive
+    // HARD CAPS so a long clip can't lock up a phone: bound BOTH the frame count and
+    // the wall-clock time; a long clip is sampled coarser / cut off with partial results.
+    const MAX_FRAMES=160, MAX_MS=40000;
+    const step=1/15; // keep dense cadence — the ball's motion tracker needs close frames
+    const t0=(performance&&performance.now)?performance.now():0;
+    let cut=false,frames=0;
+    for(let t=0;t<=d+1e-3&&S.analyzing;t+=step){
+      if(frames>=MAX_FRAMES||(t0&&performance.now()-t0>MAX_MS)){cut=true;break;} // cap frame count + wall time
+      const mt=await seekTo(t);
+      if(!S.analyzing)break; // aborted (New Clip / mode switch) mid-seek
+      if(video.readyState>=2){
+        const mtMs=mt*1000;
+        actx.drawImage(video,cover.dx*AW/CW,cover.dy*AH/CH,cover.dw*AW/CW,cover.dh*AH/CH);
+        let preds=[];try{preds=await model.detect(adet,20,0.25);}catch(e){}
+        const persons=dedupPersons(preds);
+        trackPersons(persons,mt);                             // persistent player ids
+        await ballAnalyzeFrame(mtMs,{sharedPreds:preds});     // sets S.ball; doesn't own S.dets/measure
+        if(S.ball)S.ballTrack.push({t:mt,x:S.ball.x,y:S.ball.y});
+        S.dets=persons;
+        if(S.mode==='ball'){                                  // speed metric locks the ball
+          if(S.ball){const prev=S.target||S.ball;S.target=S.ball;measure(mtMs,prev,S.target);}
+        }else{                                                // speed metric locks the top player
+          if(!S.target&&persons.length){const top=persons.reduce((a,b)=>b.score>a.score?b:a);S.target={x:top.x,y:top.y,w:top.w,h:top.h};S.lastT=0;}
+          associate(mtMs);
+        }
+        S.speedSeries.push(S.fitV);if(S.speedSeries.length>1500)S.speedSeries.shift();
+        frames++;
+      }
+      S.analyzePct=d?Math.min(1,t/d):1;updateProgress();
+      await new Promise(r=>setTimeout(r,0)); // yield so the UI stays responsive
+    }
+    for(const tr of S.tracks)if(tr.confirmed&&S.trackArchive.length<60)S.trackArchive.push(tr);
+    if(S.analyzing){
+      buildSummary();buildBreakdown();
+      try{video.currentTime=0;}catch(e){}
+      flash(cut?'Long clip — analyzed the first part. Trim to the play for a full read.'
+        :S.summary.scaleLikelyWrong
+          ?'Done — but speeds exceed a real lacrosse shot. <span class="k">Re-tap Set Scale</span> across a wide known distance.'
+          :!S.summary.calibrated
+            ?'Tracked it — but <span class="k">no scale set</span>. Tap Set Scale for real mph.'
+            :'Analysis complete · peak <span class="k">'+conv(S.summary.peakMs).toFixed(1)+'</span> '+unitLabel(),3400);
+    }
+  }catch(e){
+    flash('Analysis hit a snag — try a shorter clip.',2600);
+  }finally{ // ALWAYS release the analyzing state so the app can never get stuck/locked
+    S.analyzing=false;bA.classList.remove('on');aP.hidden=true;
   }
-  for(const tr of S.tracks)if(tr.confirmed)S.trackArchive.push(tr); // flush live tracks for possession
-  document.getElementById('bAnalyze').classList.remove('on');
-  document.getElementById('aprog').hidden=true;
-  if(S.analyzing){
-    buildSummary();
-    buildBreakdown();
-    try{video.currentTime=0;}catch(e){}
-    flash(S.summary.scaleLikelyWrong
-      ?'Done — but speeds exceed a real lacrosse shot. <span class="k">Re-tap Set Scale</span> across a wide known distance.'
-      :!S.summary.calibrated
-        ?'Tracked it — but <span class="k">no scale set</span>. Tap Set Scale for real mph, then Analyze again.'
-        :'Analysis complete · peak <span class="k">'+conv(S.summary.peakMs).toFixed(1)+'</span> '+unitLabel(),3400);
-  }
-  S.analyzing=false;
 }
 function updateProgress(){
   document.getElementById('abarFill').style.width=(S.analyzePct*100|0)+'%';
