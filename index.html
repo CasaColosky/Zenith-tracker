@@ -303,6 +303,7 @@ const S={
   calStage:0, calPts:[], ppm:null, calMeters:null, calLabel:null, autoScale:false,
   win:[], fitV:0, clampHits:0, clampTotal:0, trackValid:0, trackTotal:0, quality:null,
   tracks:[], nextTrackId:1, trackArchive:[], ball:null, ballTrack:[], breakdown:null, _narrToken:0,
+  selectedPlayer:null, players:[], showPlayers:true,
   lastT:0, startT:0, maxV:0, distM:0, smoothV:0, unit:'mph',
   trail:[], showTrail:false, showHeat:false, heat:null, HX:48, HY:0,
   recording:false, peakV:0, playDist:0, playStart:0, plays:[]
@@ -752,6 +753,8 @@ async function analyzePass(){
     flash('Analysis hit a snag — try a shorter clip.',2600);
   }finally{ // ALWAYS release the analyzing state so the app can never get stuck/locked
     S.analyzing=false;bA.classList.remove('on');aP.hidden=true;
+    // clear the leftover end-of-clip target so the idle detector doesn't get stuck on "SEARCHING"
+    S.target=null;S.searching=false;S.lost=0;
   }
 }
 function updateProgress(){
