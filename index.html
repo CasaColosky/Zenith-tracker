@@ -474,7 +474,10 @@ function setSourceUI(src){
 /* ============================ LIVE DETECT LOOP ============================ */
 async function detectLoop(){
   while(S.running){
-    if(S.analyzing){await new Promise(r=>setTimeout(r,80));continue;}
+    // NO continuous inference when analyzing OR when a file is loaded but paused/idle —
+    // that was running a full model.detect every ~0.45s forever and pegging phones after a
+    // clip loaded. File detection runs only during playback; the analyze pass does its own.
+    if(S.analyzing||(S.source==='file'&&video.paused)){await new Promise(r=>setTimeout(r,200));continue;}
     if(model&&video.readyState>=2){
       const tCap=now(); // timestamp of THIS frame, before inference advances currentTime
       dctx.drawImage(video,cover.dx*DETW/CW,cover.dy*DETH/CH,cover.dw*DETW/CW,cover.dh*DETH/CH);
@@ -486,7 +489,6 @@ async function detectLoop(){
         return {x:p.bbox[0]*sx+w/2,y:p.bbox[1]*sy+h/2,w,h,score:p.score};
       });
       associate(tCap);
-      if(S.source==='file'&&video.paused)await new Promise(r=>setTimeout(r,450)); // ease idle CPU/battery
     }else await new Promise(r=>setTimeout(r,60));
   }
 }
