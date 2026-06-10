@@ -109,6 +109,9 @@
   .bd-narr-lbl{display:block;font-size:8px;letter-spacing:.24em;color:var(--accent);text-transform:uppercase;margin-bottom:4px}
   .bd-narr p{font-family:var(--sans);font-size:11.5px;line-height:1.55;color:var(--ink)}
   .bd-narr p.muted{color:var(--dim);font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase}
+  .shbtn{width:100%;margin-top:9px;font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+    background:var(--accent);color:#08130a;border:0;border-radius:3px;padding:9px;cursor:pointer;font-weight:700}
+  .shbtn:active{transform:scale(.97)}
   .plays.players{width:190px}
   .pcount{font-size:8px;letter-spacing:.14em;color:var(--dim)}
   .pl.row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;cursor:pointer}
@@ -223,6 +226,7 @@
     <h4>Play Breakdown <span class="conf" id="bdConf"></span></h4>
     <div class="bd-events" id="bdEvents"></div>
     <div class="bd-narr"><span class="bd-narr-lbl">Recap</span><p id="bdNarrText">—</p></div>
+    <button class="shbtn" id="bSharePlay">Share ⤴</button>
   </div>
 
   <div class="plays players" id="playersPanel"><h4>Players <span class="pcount" id="plCount"></span></h4>
@@ -240,6 +244,7 @@
       <div class="readout"><div class="lbl">Poss s</div><span class="val" id="pcPoss">0.0</span></div>
     </div>
     <div class="srange"><span class="tdot" id="pcTeamDot" style="background:transparent"></span><span id="pcTeam"></span> · Time on screen <span id="pcTime">0.0</span>s · tap a player on the video or roster</div>
+    <button class="shbtn" id="bSharePlayer">Share ⤴</button>
   </div>
 
   <div class="calsheet" id="calSheet">
@@ -927,6 +932,59 @@ function renderPlayerCard(){
   document.getElementById('summaryCard').classList.remove('show');
   document.getElementById('playerCard').classList.add('show');
 }
+/* ===== save / share a result card as an image ===== */
+function shareData(kind){
+  if(kind==='player'){
+    const p=(S.players||[]).find(q=>q.id===S.selectedPlayer);if(!p)return null;
+    const team=(!S.teamsUnclear&&p.team!=='neutral')?teamLabelOf(p.id):'';
+    return {title:'Player '+p.id+(team?' · '+team:''),conf:p.conf,recap:'',rows:[
+      ['Top speed', S.ppm?conv(p.topMs).toFixed(1)+' '+S.unit.toUpperCase():'—'],
+      ['Distance', S.ppm?((p.distM<10?p.distM.toFixed(1):Math.round(p.distM))+' m'):'—'],
+      ['Possession', p.possSec.toFixed(1)+' s'],
+      ['Touches', String(p.touches)],
+      ['Time on screen', p.screenSec.toFixed(1)+' s']]};
+  }
+  if(!S.breakdown)return null;
+  const e=S.breakdown.events,rows=[];
+  if(e.faceoffTeam)rows.push(['Face-off',e.faceoffTeam]);else if(e.faceoff)rows.push(['Face-off','Player '+e.faceoff.player]);
+  if(e.teamPossession)rows.push(['Possession',e.teamPossession.map(t=>t.label+' '+t.pct+'%').join('   ')]);
+  if(e.topBall)rows.push(['Top ball',e.topBall.speed+' '+e.topBall.unit]);
+  if(e.topSpeed)rows.push(['Top speed',e.topSpeed.speed+' '+e.topSpeed.unit]);
+  if(typeof e.passes==='number')rows.push(['Passes',String(e.passes)]);
+  rows.push(['Players',String(e.players)]);
+  return {title:'Play Breakdown',conf:S.breakdown.meta.confidence,recap:(document.getElementById('bdNarrText').textContent||''),rows};
+}
+function wrapText(x,text,x0,y0,maxW,lh){const ws=String(text).split(' ');let line='',y=y0;for(const w of ws){const t=line?line+' '+w:w;if(x.measureText(t).width>maxW&&line){x.fillText(line,x0,y);line=w;y+=lh;}else line=t;}if(line)x.fillText(line,x0,y);return y;}
+function renderShareCanvas(d){
+  const W=1080,pad=72,rowH=120,recapH=d.recap?(70+Math.ceil(d.recap.length/40)*48+30):0;
+  const H=300+d.rows.length*rowH+recapH+110;
+  const c=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d');
+  x.fillStyle='#07090c';x.fillRect(0,0,W,H);
+  x.strokeStyle='rgba(200,255,50,.22)';x.lineWidth=4;x.strokeRect(24,24,W-48,H-48);
+  x.font='800 64px ui-monospace,Menlo,monospace';x.fillStyle='#e8f0f2';x.fillText('ZENITH',pad,128);
+  const bw=x.measureText('ZENITH').width;x.fillStyle='#c8ff32';x.fillText('.',pad+bw+6,128);
+  if(d.conf){const col=d.conf==='HIGH'?'#c8ff32':d.conf==='MED'?'#19e0ff':'#ff5d4a';x.font='700 26px ui-monospace,Menlo';const cw=x.measureText(d.conf).width+30;x.fillStyle=col;x.fillRect(W-pad-cw,96,cw,42);x.fillStyle='#07090c';x.fillText(d.conf,W-pad-cw+15,126);}
+  x.font='700 38px ui-monospace,Menlo';x.fillStyle='#19e0ff';x.fillText(d.title.toUpperCase(),pad,200);
+  let y=288;
+  for(const[lab,val]of d.rows){x.font='600 26px ui-monospace,Menlo';x.fillStyle='#6b7780';x.fillText(String(lab).toUpperCase(),pad,y);
+    x.font='800 64px ui-monospace,Menlo';x.fillStyle='#e8f0f2';x.fillText(String(val),pad,y+74);
+    x.strokeStyle='rgba(255,255,255,.07)';x.lineWidth=1;x.beginPath();x.moveTo(pad,y+98);x.lineTo(W-pad,y+98);x.stroke();y+=rowH;}
+  if(d.recap){y+=24;x.font='600 24px ui-monospace,Menlo';x.fillStyle='#c8ff32';x.fillText('RECAP',pad,y);y+=46;
+    x.font='34px "Helvetica Neue",Arial,sans-serif';x.fillStyle='#e8f0f2';wrapText(x,d.recap,pad,y,W-pad*2,48);}
+  x.font='600 26px ui-monospace,Menlo';x.fillStyle='#6b7780';x.fillText('zenith.robcolosky.com',pad,H-58);
+  return c;
+}
+function shareCard(kind){
+  const d=shareData(kind);if(!d){flash('Analyze a clip first',1600);return;}
+  renderShareCanvas(d).toBlob(async blob=>{
+    if(!blob){flash('Could not make image',1500);return;}
+    const file=new File([blob],'zenith.png',{type:'image/png'});
+    try{if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:'ZENITH',text:d.title});return;}}
+    catch(e){if(e&&e.name==='AbortError')return;}
+    const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='zenith-'+(kind||'play')+'.png';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),3000);
+    flash('Saved image',1400);
+  },'image/png');
+}
 async function analyzePass(){
   if(S.analyzing)return;
   if(!model){flash('Model still loading…',1500);return;}
@@ -1478,6 +1536,8 @@ document.getElementById('bLog').onclick=function(){const o=document.getElementBy
 document.getElementById('bPlayers').onclick=function(){const o=document.getElementById('playersPanel').classList.toggle('show');this.classList.toggle('on',o);
   if(o){renderPlayerList();document.getElementById('playsPanel').classList.remove('show');document.getElementById('bLog').classList.remove('on');}};
 document.getElementById('plBack').onclick=clearPlayerSelection;
+document.getElementById('bSharePlay').onclick=()=>shareCard('play');
+document.getElementById('bSharePlayer').onclick=()=>shareCard('player');
 document.getElementById('bUnit').onclick=function(){
   S.unit=S.unit==='kmh'?'mph':S.unit==='mph'?'ms':'kmh';
   const l=unitLabel();
