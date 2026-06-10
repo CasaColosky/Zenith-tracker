@@ -845,11 +845,18 @@ function buildPlayerStats(){
   S.players=out;return out;
 }
 function nearestBox(tr,t){const s=tr.samples;let best=s[0],bd=Math.abs(s[0].t-t);for(let i=1;i<s.length;i++){const dd=Math.abs(s[i].t-t);if(dd<bd){bd=dd;best=s[i];}}return{w:best.w,h:best.h};}
+let _mkCache={key:'',ms:[]};
 function buildPlayerMarkers(){
-  const out=[];if(!S.showPlayers)return out;
-  if(S.analyzing){for(const tr of S.tracks)out.push({id:tr.id,x:tr.x,y:tr.y,w:tr.w,h:tr.h,confirmed:!!tr.confirmed});}
-  else if(S.trackArchive.length){const t=video.currentTime,GAP=0.34;
-    for(const tr of S.trackArchive){if(!tr.confirmed)continue;const pos=sampleAt(tr,t,GAP);if(!pos)continue;const b=nearestBox(tr,t);out.push({id:tr.id,x:pos.x,y:pos.y,w:b.w,h:b.h,confirmed:true});}}
+  if(!S.showPlayers)return [];
+  let out;
+  if(S.analyzing){out=[];for(const tr of S.tracks)out.push({id:tr.id,x:tr.x,y:tr.y,w:tr.w,h:tr.h,confirmed:!!tr.confirmed});}
+  else if(S.trackArchive.length){
+    const t=video.currentTime,key=t.toFixed(3)+'|'+S.trackArchive.length;
+    if(_mkCache.key===key)out=_mkCache.ms;                 // paused frame → reuse (no per-rAF re-crunch)
+    else{out=[];const GAP=0.34;
+      for(const tr of S.trackArchive){if(!tr.confirmed)continue;const pos=sampleAt(tr,t,GAP);if(!pos)continue;const b=nearestBox(tr,t);out.push({id:tr.id,x:pos.x,y:pos.y,w:b.w,h:b.h,confirmed:true});}
+      _mkCache={key,ms:out};}
+  } else out=[];
   for(const m of out)m.sel=(m.id===S.selectedPlayer);
   return out;
 }
@@ -1287,15 +1294,17 @@ function newClip(){
 /* ============================ RENDER LOOP ============================ */
 function loop(){
   if(!S.running)return;
-  if(video.readyState>=2)ctx.drawImage(video,cover.dx,cover.dy,cover.dw,cover.dh);
-  if(S.showHeat)drawHeat();
-  if(S.showTrail)drawTrail();
-  if(S.calStage)drawCal();else{drawCandidates();drawPlayers();drawTarget();}
-  if(S.source==='file'&&!S.scrubbing){
-    const d=isFinite(video.duration)&&video.duration>0?video.duration:0;
-    document.getElementById('scrub').value=d?(video.currentTime/d*1000)|0:0;
-    document.getElementById('tcode').textContent=fmt(video.currentTime)+' / '+fmt(d);
-  }
+  try{ // crash-proof: a draw error must never halt rendering (that's a frozen screen)
+    if(video.readyState>=2)ctx.drawImage(video,cover.dx,cover.dy,cover.dw,cover.dh);
+    if(S.showHeat)drawHeat();
+    if(S.showTrail)drawTrail();
+    if(S.calStage)drawCal();else{drawCandidates();drawPlayers();drawTarget();}
+    if(S.source==='file'&&!S.scrubbing){
+      const d=isFinite(video.duration)&&video.duration>0?video.duration:0;
+      document.getElementById('scrub').value=d?(video.currentTime/d*1000)|0:0;
+      document.getElementById('tcode').textContent=fmt(video.currentTime)+' / '+fmt(d);
+    }
+  }catch(e){}
   requestAnimationFrame(loop);
 }
 function drawCandidates(){
