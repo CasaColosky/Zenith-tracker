@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260620b · full-clip analysis (adaptive step) + #40 broadcast highlights -->
+<!-- Z-BUILD: bcast-hl-20260620c · lockup fix (no live inference on files) + time-paced full-clip analysis + iOS reel -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -514,10 +514,14 @@ function setSourceUI(src){
 /* ============================ LIVE DETECT LOOP ============================ */
 async function detectLoop(){
   while(S.running){
-    // NO continuous inference when analyzing OR when a file is loaded but paused/idle —
-    // that was running a full model.detect every ~0.45s forever and pegging phones after a
-    // clip loaded. File detection runs only during playback; the analyze pass does its own.
-    if(S.analyzing||S.reel.on||(S.source==='file'&&video.paused)){await new Promise(r=>setTimeout(r,200));continue;} // reel plays cached overlays — no live inference
+    // Live per-frame inference is CAMERA-ONLY. A file is analyzed offline (analyzePass) and
+    // played back with cached overlays from trackArchive — running model.detect every frame
+    // during file playback pegged the phone (the lockup). Skip it for ALL file states, while
+    // analyzing, and during the reel.
+    if(S.analyzing||S.reel.on||S.source==='file'){
+      if(S.source==='file'&&S.dets.length)S.dets=[]; // drop stale candidate boxes on a file
+      await new Promise(r=>setTimeout(r,200));continue;
+    }
     if(model&&video.readyState>=2){
       const tCap=now(); // timestamp of THIS frame, before inference advances currentTime
       dctx.drawImage(video,cover.dx*DETW/CW,cover.dy*DETH/CH,cover.dw*DETW/CW,cover.dh*DETH/CH);
@@ -1067,13 +1071,14 @@ function startReel(playerId){
   const segs=buildHighlights(playerId);
   if(!segs.length){flash('No touches for <span class="k">'+nameOf(playerId)+'</span> yet — film the play & Analyze again',2800);return;}
   S.selectedPlayer=playerId;
-  S.reel={on:true,segs,i:0,playerId,intro:performance.now()+1400,flash:0,flashV:0};
+  S.reel={on:true,segs,i:0,playerId,intro:performance.now()+1200,flash:0,flashV:0};
   document.getElementById('playerCard').classList.remove('show');
   document.getElementById('playersPanel').classList.remove('show');
   document.getElementById('bPlayers').classList.remove('on');
   showReelBar();
-  try{video.pause();}catch(e){} // intro card holds on frame 0; loop() starts playback when it ends
   reelSeek(segs[0].start);
+  // play INSIDE the user gesture (iOS blocks deferred autoplay); the intro card just overlays
+  video.play().catch(()=>{});document.getElementById('bPlay').textContent='❚❚';
 }
 function playMoment(seg){ // play a single touch (no intro card — snappier)
   if(!seg)return;
@@ -1091,12 +1096,10 @@ function endReel(done){
 }
 function advanceReel(){ // driven every frame from loop()
   const r=S.reel;if(!r.on)return;
-  if(r.intro>0){
-    if(performance.now()>=r.intro){r.intro=0;reelSeek(r.segs[0].start);video.play().catch(()=>{});document.getElementById('bPlay').textContent='❚❚';}
-    return;
-  }
+  if(r.intro>0&&performance.now()>=r.intro)r.intro=0; // intro is a CARD timer only — playback already running
   const seg=r.segs[r.i];
   if(!seg){endReel(true);return;}
+  if(video.paused&&r.intro===0)video.play().catch(()=>{}); // resume if a seek paused it (gesture already unlocked playback)
   if(!video.paused&&video.currentTime>=seg.end-0.02){
     r.i++;
     if(r.i>=r.segs.length){endReel(true);return;}
@@ -1270,15 +1273,13 @@ async function analyzePass(){
       const a=await autoCalibrate(d);
       if(a&&S.analyzing){S.ppm=a;S.autoScale=true;updateScaleReadout();}
     }
-    // Cover the WHOLE clip within a fixed frame budget: dense (1/15s) on short clips, and
-    // stretched coarser on long ones so the END of the clip is never dropped. The budget (not
-    // a time window) is what protects a phone from locking up; wall-clock is just a backstop.
-    const MAX_FRAMES=200, MAX_MS=55000;
-    const step=Math.max(1/15, d/MAX_FRAMES); // ≤13s ⇒ dense; longer ⇒ spread 200 frames across all of d
+    // DYNAMIC time-paced sampling: after each frame, stretch the step so the REST of the clip
+    // fits the remaining frame + wall-clock budget. The clip END is always reached — dense on a
+    // fast device, coarser on a slow one — instead of truncating the tail at a hard cap.
+    const MAX_FRAMES=220, MAX_MS=55000, MIN_STEP=1/15;
     const t0=(performance&&performance.now)?performance.now():0;
-    let cut=false,frames=0,covered=0;
-    for(let t=0;t<=d+1e-3&&S.analyzing&&frames<=MAX_FRAMES+4;t+=step){
-      if(t0&&performance.now()-t0>MAX_MS){cut=true;break;} // wall-clock backstop only (slow phone / very long clip)
+    let cut=false,frames=0,covered=0,t=0,step=MIN_STEP;
+    while(t<=d+1e-3&&S.analyzing&&frames<MAX_FRAMES){
       const mt=await seekTo(t);
       if(!S.analyzing)break; // aborted (New Clip / mode switch) mid-seek
       if(video.readyState>=2){
@@ -1302,6 +1303,12 @@ async function analyzePass(){
       }
       S.analyzePct=d?Math.min(1,t/d):1;updateProgress();
       await new Promise(r=>setTimeout(r,0)); // yield so the UI stays responsive
+      const tLeft=d-t;if(tLeft<=1e-3)break;                  // reached the clip end
+      const elapsed=t0?performance.now()-t0:0,avg=elapsed/Math.max(1,frames);
+      const byTime=(MAX_MS-elapsed)/Math.max(avg,1),byCount=MAX_FRAMES-frames; // frames still affordable
+      const framesLeft=Math.min(byTime,byCount);
+      if(framesLeft<1){cut=true;break;}                      // out of budget before the end
+      step=Math.max(MIN_STEP,tLeft/framesLeft);t+=step;
     }
     for(const tr of S.tracks)if(tr.confirmed&&S.trackArchive.length<60)S.trackArchive.push(tr);
     try{buildTeamModel();}catch(e){S.teamsUnclear=true;} // cluster tracks into 2 teams by jersey color
@@ -1310,7 +1317,7 @@ async function analyzePass(){
       try{buildPlayerStats();}catch(e){S.players=[];}
       S.selectedPlayer=null;renderPlayerList();
       try{video.currentTime=0;}catch(e){}
-      flash(cut?'Big clip — analyzed through <span class="k">'+fmt(covered)+'</span> before the time limit. Trim closer to the play for the full read.'
+      flash((cut&&covered<d-1)?'Big clip — analyzed through <span class="k">'+fmt(covered)+'</span> before the time limit. Trim closer to the play for the full read.'
         :S.summary.scaleLikelyWrong
           ?'Done — but speeds exceed a real lacrosse shot. <span class="k">Re-tap Set Scale</span> across a wide known distance.'
           :!S.summary.calibrated
