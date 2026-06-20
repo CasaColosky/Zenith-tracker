@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260620 · #40 broadcast highlights + in-play filter -->
+<!-- Z-BUILD: bcast-hl-20260620b · full-clip analysis (adaptive step) + #40 broadcast highlights -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1270,14 +1270,15 @@ async function analyzePass(){
       const a=await autoCalibrate(d);
       if(a&&S.analyzing){S.ppm=a;S.autoScale=true;updateScaleReadout();}
     }
-    // HARD CAPS so a long clip can't lock up a phone: bound BOTH the frame count and
-    // the wall-clock time; a long clip is sampled coarser / cut off with partial results.
-    const MAX_FRAMES=160, MAX_MS=40000;
-    const step=1/15; // keep dense cadence — the ball's motion tracker needs close frames
+    // Cover the WHOLE clip within a fixed frame budget: dense (1/15s) on short clips, and
+    // stretched coarser on long ones so the END of the clip is never dropped. The budget (not
+    // a time window) is what protects a phone from locking up; wall-clock is just a backstop.
+    const MAX_FRAMES=200, MAX_MS=55000;
+    const step=Math.max(1/15, d/MAX_FRAMES); // ≤13s ⇒ dense; longer ⇒ spread 200 frames across all of d
     const t0=(performance&&performance.now)?performance.now():0;
-    let cut=false,frames=0;
-    for(let t=0;t<=d+1e-3&&S.analyzing;t+=step){
-      if(frames>=MAX_FRAMES||(t0&&performance.now()-t0>MAX_MS)){cut=true;break;} // cap frame count + wall time
+    let cut=false,frames=0,covered=0;
+    for(let t=0;t<=d+1e-3&&S.analyzing&&frames<=MAX_FRAMES+4;t+=step){
+      if(t0&&performance.now()-t0>MAX_MS){cut=true;break;} // wall-clock backstop only (slow phone / very long clip)
       const mt=await seekTo(t);
       if(!S.analyzing)break; // aborted (New Clip / mode switch) mid-seek
       if(video.readyState>=2){
@@ -1297,7 +1298,7 @@ async function analyzePass(){
           associate(mtMs);
         }
         S.speedSeries.push(S.fitV);if(S.speedSeries.length>1500)S.speedSeries.shift();
-        frames++;
+        frames++;covered=mt;
       }
       S.analyzePct=d?Math.min(1,t/d):1;updateProgress();
       await new Promise(r=>setTimeout(r,0)); // yield so the UI stays responsive
@@ -1309,7 +1310,7 @@ async function analyzePass(){
       try{buildPlayerStats();}catch(e){S.players=[];}
       S.selectedPlayer=null;renderPlayerList();
       try{video.currentTime=0;}catch(e){}
-      flash(cut?'Long clip — analyzed the first part. Trim to the play for a full read.'
+      flash(cut?'Big clip — analyzed through <span class="k">'+fmt(covered)+'</span> before the time limit. Trim closer to the play for the full read.'
         :S.summary.scaleLikelyWrong
           ?'Done — but speeds exceed a real lacrosse shot. <span class="k">Re-tap Set Scale</span> across a wide known distance.'
           :!S.summary.calibrated
