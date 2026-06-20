@@ -318,8 +318,12 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"
+  integrity="sha384-vE8hbVJ4lezako5rlvE7bY0BVzWlFhZncPlckrqNwcUQpVtgbENTgZ8TBbnPjZre"
+  crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"
+  integrity="sha384-7qLdgfEQyO9ZQi9ArRHigK+IBto4XPk468jAqc+fnsXaZIcMAhQeLwzggRK7aESl"
+  crossorigin="anonymous"></script>
 <script>
 const video=document.getElementById('cam');
 const cv=document.getElementById('view');
@@ -345,7 +349,7 @@ const S={
   calStage:0, calPts:[], ppm:null, calMeters:null, calLabel:null, autoScale:false,
   win:[], fitV:0, clampHits:0, clampTotal:0, trackValid:0, trackTotal:0, quality:null,
   tracks:[], nextTrackId:1, trackArchive:[], ball:null, ballTrack:[], breakdown:null, _narrToken:0,
-  selectedPlayer:null, players:[], showPlayers:true,
+  selectedPlayer:null, players:[], showPlayers:true, playerNames:{},
   teams:{}, teamLabels:{}, teamsUnclear:true, teamConf:'LOW', teamFilter:'all',
   lastT:0, startT:0, maxV:0, distM:0, smoothV:0, unit:'mph',
   trail:[], showTrail:false, showHeat:false, heat:null, HX:48, HY:0,
@@ -363,6 +367,7 @@ const TEAM={A:{tag:'A',label:'White',col:'#ff9d3c'},B:{tag:'B',label:'Dark',col:
 const teamOf=id=>S.teams[id]||'neutral';
 const teamCol=id=>TEAM[teamOf(id)].col;
 const teamLabelOf=id=>{const t=teamOf(id);return (S.teamLabels&&S.teamLabels[t])||TEAM[t].label;};
+const nameOf=id=>(S.playerNames&&S.playerNames[id])||('P'+id); // user-given name/number, else Pxx
 // calibration
 const MIN_SPAN_FRAC=0.08;                // reject calibration taps closer than 8% of frame width
 const CAL_PRESETS=[
@@ -552,7 +557,7 @@ function resetTrajectory(){
   S.target=null;S.searching=false;S.maxV=0;S.distM=0;S.smoothV=0;S.fitV=0;S.peakV=0;S.lastT=0;S.startT=0;
   S.trail=[];S.fitSamples=[];S.win=[];S.clampHits=0;S.clampTotal=0;S.trackValid=0;S.trackTotal=0;
   S.tracks=[];S.nextTrackId=1;S.trackArchive=[];S.ball=null;S.ballTrack=[];
-  S.selectedPlayer=null;S.players=[];S.teams={};S.teamLabels={};S.teamsUnclear=true;S.teamConf='LOW';
+  S.selectedPlayer=null;S.players=[];S.playerNames={};S.teams={};S.teamLabels={};S.teamsUnclear=true;S.teamConf='LOW';
   if(S.heat)S.heat.fill(0);
 }
 function hidePlayerUI(){
@@ -877,7 +882,7 @@ function drawPlayers(){
     const bw=Math.max(14*DPR,m.w),bh=Math.max(28*DPR,m.h),bx=m.x-bw/2,by=m.y-bh/2;
     ctx.globalAlpha=sel?1:(m.confirmed?.85:.5);ctx.lineWidth=(sel?2.5:1.5)*DPR;ctx.strokeStyle=col;
     ctx.setLineDash(sel?[]:[5*DPR,4*DPR]);ctx.strokeRect(bx,by,bw,bh);ctx.setLineDash([]);
-    const lab='P'+m.id+(teamsOn&&teamOf(m.id)!=='neutral'?' '+TEAM[teamOf(m.id)].tag:''),tw=ctx.measureText(lab).width+8*DPR;
+    const lab=nameOf(m.id)+(teamsOn&&teamOf(m.id)!=='neutral'?' '+TEAM[teamOf(m.id)].tag:''),tw=ctx.measureText(lab).width+8*DPR;
     ctx.fillStyle='rgba(7,9,12,.78)';ctx.fillRect(bx,by-15*DPR,tw,14*DPR);
     ctx.fillStyle=sel?'#c8ff32':tc;ctx.fillText(lab,bx+4*DPR,by-8*DPR);
     ctx.beginPath();ctx.arc(m.x,m.y,(sel?3.5:2.2)*DPR,0,7);ctx.fillStyle=col;ctx.fill();
@@ -890,14 +895,14 @@ function selectPlayer(id){
   if(tr){const ls=tr.samples&&tr.samples[tr.samples.length-1];
     S.target={x:tr.x!=null?tr.x:(ls?ls.x:0),y:tr.y!=null?tr.y:(ls?ls.y:0),w:tr.w||0.12*CW,h:tr.h||0.26*CH};S.lost=0;S.searching=false;}
   renderPlayerList();renderPlayerCard();
-  flash('Player <span class="k">P'+id+'</span>'+(S.ppm?'':' · set scale for speed'),1600);
+  flash('<span class="k">'+nameOf(id)+'</span> — tap the name on the card to label them (e.g. 40)',2200);
 }
 function clearPlayerSelection(){S.selectedPlayer=null;document.getElementById('playerCard').classList.remove('show');renderPlayerList();
   if(S.breakdown)document.getElementById('breakdownCard').classList.add('show');else if(S.summary)document.getElementById('summaryCard').classList.add('show');}
 function fmtPlayerRow(p){const sp=S.ppm?conv(p.topMs).toFixed(1)+' '+S.unit:'—';const tc=teamCol(p.id);
   return '<div class="pl row'+(p.id===S.selectedPlayer?' sel':'')+'" data-pid="'+p.id+'">'
     +'<span class="tbar" style="background:'+tc+'"></span>'
-    +'<span><span class="tdot" style="background:'+tc+'"></span><b>P'+p.id+'</b></span>'
+    +'<span><span class="tdot" style="background:'+tc+'"></span><b>'+nameOf(p.id)+'</b></span>'
     +'<span class="pmeta">'+sp+'<br>'+p.touches+' touch · '+p.possSec.toFixed(1)+'s</span></div>';}
 function renderTeamLegend(){
   const el=document.getElementById('teamLegend');if(!el)return;
@@ -918,7 +923,10 @@ function renderPlayerList(){
 function renderPlayerCard(){
   const p=(S.players||[]).find(q=>q.id===S.selectedPlayer);
   if(!p){document.getElementById('playerCard').classList.remove('show');return;}
-  document.getElementById('pcName').textContent='P'+p.id;
+  const nm=document.getElementById('pcName');nm.textContent=nameOf(p.id);
+  nm.style.cursor='pointer';nm.title='Tap to name / number this player';
+  nm.onclick=()=>{const v=prompt('Name or number this player (e.g. 40, or "40 Bobby")',S.playerNames[p.id]||'');
+    if(v!=null){if(v.trim())S.playerNames[p.id]=v.trim();else delete S.playerNames[p.id];renderPlayerList();renderPlayerCard();if(S.breakdown)buildBreakdown();}};
   document.getElementById('pcTop').textContent=S.ppm?conv(p.topMs).toFixed(1):'—';
   document.getElementById('pcTopU').textContent=unitLabel();
   document.getElementById('pcTouch').textContent=p.touches;
@@ -937,7 +945,7 @@ function shareData(kind){
   if(kind==='player'){
     const p=(S.players||[]).find(q=>q.id===S.selectedPlayer);if(!p)return null;
     const team=(!S.teamsUnclear&&p.team!=='neutral')?teamLabelOf(p.id):'';
-    return {title:'Player '+p.id+(team?' · '+team:''),conf:p.conf,recap:'',rows:[
+    return {title:nameOf(p.id)+(team?' · '+team:''),conf:p.conf,recap:'',rows:[
       ['Top speed', S.ppm?conv(p.topMs).toFixed(1)+' '+S.unit.toUpperCase():'—'],
       ['Distance', S.ppm?((p.distM<10?p.distM.toFixed(1):Math.round(p.distM))+' m'):'—'],
       ['Possession', p.possSec.toFixed(1)+' s'],
