@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260620d · robust clip duration (seekable cross-check) + on-screen coverage diagnostic + tighter player speed clamp -->
+<!-- Z-BUILD: bcast-hl-20260620e · one-tap pick-your-kid + hero keepsake share card (film still + name/number) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -202,7 +202,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-d</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-e</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -967,12 +967,22 @@ function drawPlayers(){
   ctx.globalAlpha=1;ctx.restore();
 }
 function findTrackById(id){return S.tracks.find(t=>t.id===id)||S.trackArchive.find(t=>t.id===id)||null;}
-function selectPlayer(id){
+// one place to name/number a player; flows to marker, card, roster, reel lower-third, share
+function namePlayer(id,then){
+  const v=prompt('Who is this? Name or number  (e.g. 40, or "40 Bobby")',S.playerNames[id]||'');
+  if(v!=null){if(v.trim())S.playerNames[id]=v.trim();else delete S.playerNames[id];
+    renderPlayerList();if(S.selectedPlayer===id)renderPlayerCard();if(S.breakdown)buildBreakdown();}
+  if(then)then(!!(S.playerNames&&S.playerNames[id]));
+}
+function selectPlayer(id,pick){
   S.selectedPlayer=id;const tr=findTrackById(id);
   if(tr){const ls=tr.samples&&tr.samples[tr.samples.length-1];
     S.target={x:tr.x!=null?tr.x:(ls?ls.x:0),y:tr.y!=null?tr.y:(ls?ls.y:0),w:tr.w||0.12*CW,h:tr.h||0.26*CH};S.lost=0;S.searching=false;}
   renderPlayerList();renderPlayerCard();
-  flash('<span class="k">'+nameOf(id)+'</span> — tap the name on the card to label them (e.g. 40)',2200);
+  const named=!!(S.playerNames&&S.playerNames[id]);
+  // ONE-TAP PICK-YOUR-KID: tapping a player on the video names them on the spot, then points at the reel
+  if(pick&&!named){namePlayer(id,()=>flash('Got <span class="k">'+nameOf(id)+'</span> — tap <span class="k">▶ '+nameOf(id)+'’s Highlights</span> for their reel',3000));}
+  else flash('<span class="k">'+nameOf(id)+'</span> — tap <span class="k">▶ Highlights</span> for their reel',2200);
 }
 function clearPlayerSelection(){S.selectedPlayer=null;document.getElementById('playerCard').classList.remove('show');renderPlayerList();
   if(S.breakdown)document.getElementById('breakdownCard').classList.add('show');else if(S.summary)document.getElementById('summaryCard').classList.add('show');}
@@ -1002,8 +1012,7 @@ function renderPlayerCard(){
   if(!p){document.getElementById('playerCard').classList.remove('show');return;}
   const nm=document.getElementById('pcName');nm.textContent=nameOf(p.id);
   nm.style.cursor='pointer';nm.title='Tap to name / number this player';
-  nm.onclick=()=>{const v=prompt('Name or number this player (e.g. 40, or "40 Bobby")',S.playerNames[p.id]||'');
-    if(v!=null){if(v.trim())S.playerNames[p.id]=v.trim();else delete S.playerNames[p.id];renderPlayerList();renderPlayerCard();if(S.breakdown)buildBreakdown();}};
+  nm.onclick=()=>namePlayer(p.id);
   document.getElementById('pcTop').textContent=S.ppm?conv(p.topMs).toFixed(1):'—';
   document.getElementById('pcTopU').textContent=unitLabel();
   document.getElementById('pcTouch').textContent=p.touches;
@@ -1022,8 +1031,9 @@ function renderMoments(id){
   const el=document.getElementById('pcMoments');if(!el)return;
   const rb=document.getElementById('bReel');
   const segs=buildHighlights(id);S._moCache=segs;
+  const named=!!(S.playerNames&&S.playerNames[id]);
   if(!segs.length){el.innerHTML='<div class="empty">No touches detected — try a longer clip</div>';if(rb){rb.disabled=true;rb.textContent='▶ Highlights';}return;}
-  if(rb){rb.disabled=false;rb.textContent='▶ Highlights ('+segs.length+')';}
+  if(rb){rb.disabled=false;rb.textContent='▶ '+(named?nameOf(id)+'’s reel':'Highlights')+' ('+segs.length+')';}
   el.innerHTML=segs.map((s,i)=>{
     const zap=(s.peak>0&&S.ppm)?' <span class="zap">⚡'+conv(s.peak).toFixed(0)+'</span>':'';
     return '<div class="mo" data-i="'+i+'"><span><b>Touch '+(i+1)+'</b> · '+fmt(s.start)+'</span><span>'+s.dur.toFixed(1)+'s'+zap+'</span></div>';
@@ -1215,12 +1225,21 @@ function shareData(kind){
   if(kind==='player'){
     const p=(S.players||[]).find(q=>q.id===S.selectedPlayer);if(!p)return null;
     const team=(!S.teamsUnclear&&p.team!=='neutral')?teamLabelOf(p.id):'';
-    return {title:nameOf(p.id)+(team?' · '+team:''),conf:p.conf,recap:'',rows:[
-      ['Top speed', S.ppm?conv(p.topMs).toFixed(1)+' '+S.unit.toUpperCase():'—'],
-      ['Distance', S.ppm?((p.distM<10?p.distM.toFixed(1):Math.round(p.distM))+' m'):'—'],
-      ['Possession', p.possSec.toFixed(1)+' s'],
-      ['Touches', String(p.touches)],
-      ['Time on screen', p.screenSec.toFixed(1)+' s']]};
+    const nm=nameOf(p.id),number=((S.playerNames&&S.playerNames[p.id])||'').match(/\d{1,3}/)?.[0]||'';
+    const est=S.autoScale||!S.ppm; // speed is an estimate unless the user Set Scale
+    return {hero:true, name:nm, number, team,
+      color:(!S.teamsUnclear&&p.team!=='neutral')?teamCol(p.id):'#c8ff32',
+      conf:p.conf, estimated:est,
+      tiles:[
+        ['Top '+S.unit.toUpperCase(), S.ppm?conv(p.topMs).toFixed(1):'—'],
+        ['Touches', String(p.touches)],
+        ['Poss s', p.possSec.toFixed(1)]],
+      title:nm+(team?' · '+team:''),conf2:p.conf,recap:'',rows:[
+        ['Top speed', S.ppm?conv(p.topMs).toFixed(1)+' '+S.unit.toUpperCase()+(est?' (est)':''):'—'],
+        ['Distance', S.ppm?((p.distM<10?p.distM.toFixed(1):Math.round(p.distM))+' m'):'—'],
+        ['Possession', p.possSec.toFixed(1)+' s'],
+        ['Touches', String(p.touches)],
+        ['Time on screen', p.screenSec.toFixed(1)+' s']]};
   }
   if(!S.breakdown)return null;
   const e=S.breakdown.events,rows=[];
@@ -1252,15 +1271,65 @@ function renderShareCanvas(d){
   x.font='600 26px ui-monospace,Menlo';x.fillStyle='#6b7780';x.fillText('zenith.robcolosky.com',pad,H-58);
   return c;
 }
-function shareCard(kind){
+function roundRectX(x,X,Y,w,h,r){x.beginPath();x.moveTo(X+r,Y);x.arcTo(X+w,Y,X+w,Y+h,r);x.arcTo(X+w,Y+h,X,Y+h,r);x.arcTo(X,Y+h,X,Y,r);x.arcTo(X,Y,X+w,Y,r);x.closePath();}
+// grab a real film still from the player's BEST highlight moment (for the keepsake card)
+async function capturePlayerStill(id){
+  if(S.source!=='file'||!video.videoWidth)return null;
+  let segs=[];try{segs=buildHighlights(id);}catch(e){}
+  let t=video.currentTime||0;
+  if(segs.length){const best=segs.reduce((a,b)=>((b.peak||0)>(a.peak||0)?b:a));t=(best.start+best.end)/2;}
+  const was=video.currentTime;
+  try{await seekTo(t);}catch(e){}
+  let c=null;
+  try{c=document.createElement('canvas');c.width=video.videoWidth;c.height=video.videoHeight;c.getContext('2d').drawImage(video,0,0,c.width,c.height);}catch(e){c=null;}
+  try{video.currentTime=was;}catch(e){}
+  return c;
+}
+// the "pro card" — name + jersey number over a real film still, with 3 hero stats
+function renderHeroCard(d,bg){
+  const W=1080,H=1350,M='ui-monospace,Menlo,monospace';
+  const c=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d');
+  x.fillStyle='#07090c';x.fillRect(0,0,W,H);
+  if(bg){const s=Math.max(W/bg.width,H/bg.height),dw=bg.width*s,dh=bg.height*s;
+    x.drawImage(bg,(W-dw)/2,(H-dh)/2,dw,dh);
+    const g=x.createLinearGradient(0,0,0,H);g.addColorStop(0,'rgba(7,9,12,.55)');g.addColorStop(.42,'rgba(7,9,12,.20)');g.addColorStop(1,'rgba(7,9,12,.97)');
+    x.fillStyle=g;x.fillRect(0,0,W,H);}
+  const accent=d.color||'#c8ff32';
+  x.strokeStyle=accent;x.globalAlpha=.5;x.lineWidth=5;x.strokeRect(22,22,W-44,H-44);x.globalAlpha=1;
+  x.textBaseline='alphabetic';x.textAlign='left';
+  x.font='800 30px '+M;x.fillStyle='#e8f0f2';x.fillText('FACEOFF',56,88);
+  const fw=x.measureText('FACEOFF').width;x.fillStyle=accent;x.fillText(' IQ',56+fw,88);
+  if(d.number){x.font='900 250px '+M;x.fillStyle=accent;x.globalAlpha=.92;x.fillText(d.number,48,H-486);x.globalAlpha=1;}
+  let fs=92;x.font='900 '+fs+'px '+M;const NM=(d.name||'').toUpperCase();
+  while(fs>40&&x.measureText(NM).width>W-112){fs-=4;x.font='900 '+fs+'px '+M;}
+  x.fillStyle='#fff';x.fillText(NM,56,H-360);
+  if(d.team){x.font='700 30px '+M;x.fillStyle=accent;x.fillText(d.team.toUpperCase(),58,H-318);}
+  const tiles=d.tiles||[],n=Math.max(1,tiles.length),gap=20,tw=(W-112-gap*(n-1))/n,ty=H-280,th=152;
+  tiles.forEach((t,i)=>{const tx=56+i*(tw+gap);
+    x.fillStyle='rgba(7,9,12,.62)';roundRectX(x,tx,ty,tw,th,12);x.fill();
+    x.strokeStyle='rgba(255,255,255,.14)';x.lineWidth=1.5;roundRectX(x,tx,ty,tw,th,12);x.stroke();
+    x.textAlign='center';x.fillStyle='#6b7780';x.font='600 20px '+M;x.fillText(String(t[0]).toUpperCase(),tx+tw/2,ty+44);
+    x.fillStyle='#e8f0f2';x.font='800 '+(String(t[1]).length>5?40:56)+'px '+M;x.fillText(String(t[1]),tx+tw/2,ty+112);});
+  x.textAlign='left';x.font='600 24px '+M;x.fillStyle='#6b7780';x.fillText('zenith.robcolosky.com',56,H-58);
+  if(d.conf){x.textAlign='right';const col=d.conf==='HIGH'?'#c8ff32':d.conf==='MED'?'#19e0ff':'#ff5d4a';
+    x.fillStyle=col;x.fillText(d.conf+(d.estimated?' · EST':''),W-56,H-58);x.textAlign='left';}
+  return c;
+}
+async function shareCard(kind){
   const d=shareData(kind);if(!d){flash('Analyze a clip first',1600);return;}
-  renderShareCanvas(d).toBlob(async blob=>{
+  let canvas;
+  if(d.hero){flash('Building <span class="k">'+d.name+'</span>’s card…',1400);
+    let bg=null;try{bg=await capturePlayerStill(S.selectedPlayer);}catch(e){}
+    canvas=renderHeroCard(d,bg);}
+  else canvas=renderShareCanvas(d);
+  canvas.toBlob(async blob=>{
     if(!blob){flash('Could not make image',1500);return;}
-    const file=new File([blob],'zenith.png',{type:'image/png'});
-    try{if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:'ZENITH',text:d.title});return;}}
+    const file=new File([blob],'faceoff-iq.png',{type:'image/png'});
+    const text=d.hero?(d.name+' · Faceoff IQ'):d.title;
+    try{if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:'Faceoff IQ',text});return;}}
     catch(e){if(e&&e.name==='AbortError')return;}
-    const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='zenith-'+(kind||'play')+'.png';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),3000);
-    flash('Saved image',1400);
+    const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='faceoff-'+(kind||'play')+'.png';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),3000);
+    flash('Saved card',1400);
   },'image/png');
 }
 async function analyzePass(){
@@ -1333,7 +1402,7 @@ async function analyzePass(){
         :S.summary.scaleLikelyWrong?'speeds exceed a real shot — <span class="k">re-tap Set Scale</span> wide.'
         :!S.summary.calibrated?'<span class="k">no scale set</span> — tap Set Scale for real mph.'
         :'peak <span class="k">'+conv(S.summary.peakMs).toFixed(1)+'</span> '+unitLabel();
-      flash(covLine+'\n'+tail,4200);
+      flash(covLine+'\n'+tail+'\n👆 <span class="k">Tap your kid on the video</span> → name → ▶ reel',5200);
     }
   }catch(e){
     flash('Analysis hit a snag — try a shorter clip.',2600);
@@ -1726,7 +1795,7 @@ cv.addEventListener('pointerdown',e=>{
     const ms=buildPlayerMarkers();let hitId=null,hbd=1e9;
     for(const m of ms){const bw=Math.max(14*DPR,m.w),bh=Math.max(28*DPR,m.h);
       if(Math.abs(x-m.x)<bw/2&&Math.abs(y-m.y)<bh/2){const dd=Math.hypot(x-m.x,y-m.y);if(dd<hbd){hbd=dd;hitId=m.id;}}}
-    if(hitId!=null){setMode(S.source==='file'?'FILE':'LIVE');selectPlayer(hitId);return;}
+    if(hitId!=null){setMode(S.source==='file'?'FILE':'LIVE');selectPlayer(hitId,true);return;} // pick=true ⇒ one-tap name prompt
   }
   S.selectedPlayer=null;
   let pick=null,bd=1e9;
