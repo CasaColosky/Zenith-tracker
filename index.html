@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260620c · lockup fix (no live inference on files) + time-paced full-clip analysis + iOS reel -->
+<!-- Z-BUILD: bcast-hl-20260620d · robust clip duration (seekable cross-check) + on-screen coverage diagnostic + tighter player speed clamp -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -26,6 +26,7 @@
     background:linear-gradient(180deg,rgba(7,9,12,.85),rgba(7,9,12,0));pointer-events:none}
   .brand{font-family:var(--mono);font-weight:700;letter-spacing:.32em;font-size:13px}
   .brand b{color:var(--accent)}
+  .brand .ver{font-size:8px;letter-spacing:.1em;color:var(--accent2);opacity:.7;margin-left:4px}
   .tags{display:flex;gap:6px;align-items:center}
   .mode{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--dim);
     border:1px solid var(--line);padding:5px 9px;border-radius:2px;text-transform:uppercase}
@@ -201,7 +202,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER</div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-d</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -376,6 +377,7 @@ const S={
   tracks:[], nextTrackId:1, trackArchive:[], ball:null, ballTrack:[], breakdown:null, _narrToken:0,
   selectedPlayer:null, players:[], showPlayers:true, playerNames:{},
   fieldActive:false, fieldFrames:0, fieldHits:0,                 // in-play (green-field) filter telemetry
+  clipDur:0, cov:null,                                            // detected clip length + analyzed-coverage diagnostic
   reel:{on:false,segs:[],i:0,playerId:null,intro:0,flash:0,flashV:0},// #40 highlight reel state
   teams:{}, teamLabels:{}, teamsUnclear:true, teamConf:'LOW', teamFilter:'all',
   lastT:0, startT:0, maxV:0, distM:0, smoothV:0, unit:'mph',
@@ -384,7 +386,7 @@ const S={
 };
 // speed-accuracy tuning
 const WIN_N=7, WIN_T_MAX=0.5;            // trajectory-fit window: max samples / max age (s)
-const CEIL={ball:50,player:12};          // m/s physical ceiling (~112 mph ball / 27 mph player)
+const CEIL={ball:50,player:10};          // m/s physical ceiling (~112 mph ball / ~22 mph player — a real lacrosse sprint tops ~10 m/s)
 const TYP={ball:[15,50],player:[2,11]};  // m/s plausible band (confidence only)
 const OVER_FRAC_FLAG=0.15;               // >15% of samples over ceiling ⇒ scale is wrong
 // multi-object (player) tracking — SORT-style, geometry-only, no appearance model
@@ -476,7 +478,7 @@ async function bootFile(file){
     });
     video.onerror=null;video.onloadedmetadata=null;
     video.pause();
-    await ensureDuration();try{video.currentTime=0;}catch(e){}
+    S.clipDur=await ensureDuration();try{video.currentTime=0;}catch(e){}
     resize();
     if(!model){st.innerHTML='<span class="spin"></span>Loading vision model… (first load downloads ~6MB)';
       model=await cocoSsd.load({base:'lite_mobilenet_v2'});}
@@ -620,13 +622,21 @@ function seekTo(t){
 }
 // MediaRecorder / streamed clips report duration=Infinity until coaxed; seek far
 // past the end so the browser resolves the real length, then return to 0.
+// Most reliable clip length: duration, cross-checked against the seekable end. Some phone
+// clips report a SHORT/rounded duration but are seekable further — trusting duration alone
+// then analyzed only the first part ("cut off"). Take the larger.
+function clipDuration(){
+  let d=(isFinite(video.duration)&&video.duration>0)?video.duration:0;
+  try{const s=video.seekable;if(s&&s.length){const e=s.end(s.length-1);if(isFinite(e)&&e>d+0.05)d=e;}}catch(e){}
+  return d;
+}
 function ensureDuration(){
   return new Promise(res=>{
-    if(isFinite(video.duration)&&video.duration>0)return res(video.duration);
+    if(clipDuration()>0&&isFinite(video.duration))return res(clipDuration());
     let done=false;
     const fin=()=>{if(done)return;done=true;video.removeEventListener('durationchange',ch);
-      try{video.currentTime=0;}catch(e){}res(isFinite(video.duration)?video.duration:0);};
-    const ch=()=>{if(isFinite(video.duration)&&video.duration>0)fin();};
+      try{video.currentTime=0;}catch(e){}res(clipDuration());};
+    const ch=()=>{if(clipDuration()>0&&isFinite(video.duration))fin();};
     video.addEventListener('durationchange',ch);
     try{video.currentTime=1e101;}catch(e){}
     setTimeout(fin,2000);
@@ -1051,7 +1061,7 @@ function buildHighlights(playerId){
   if(!ivs.length)return [];
   const target=nameOf(playerId),ids=new Set([playerId]);
   for(const k in S.playerNames)if(S.playerNames[k]===target)ids.add(+k);
-  const d=isFinite(video.duration)&&video.duration>0?video.duration:1e9;
+  const d=clipDuration()||1e9;
   const PRE=0.8,POST=1.2,MERGE=0.7;
   const segs=ivs.filter(iv=>ids.has(iv.playerId))
     .map(iv=>({start:Math.max(0,iv.tStart-PRE),end:Math.min(d,iv.tEnd+POST)}))
@@ -1266,7 +1276,7 @@ async function analyzePass(){
     document.getElementById('summaryCard').classList.remove('show');
     document.getElementById('breakdownCard').classList.remove('show');
     video.pause();
-    const d=isFinite(video.duration)&&video.duration>0?video.duration:await ensureDuration();
+    let d=clipDuration();if(!d)d=await ensureDuration();S.clipDur=d; // robust length so the END isn't dropped
     if(!d){flash('Could not read clip length',2000);return;}
     if(!S.ppm){ // no manual scale → auto-estimate from player size, zero setup
       flash('Auto-scaling from players…',1600);
@@ -1317,12 +1327,13 @@ async function analyzePass(){
       try{buildPlayerStats();}catch(e){S.players=[];}
       S.selectedPlayer=null;renderPlayerList();
       try{video.currentTime=0;}catch(e){}
-      flash((cut&&covered<d-1)?'Big clip — analyzed through <span class="k">'+fmt(covered)+'</span> before the time limit. Trim closer to the play for the full read.'
-        :S.summary.scaleLikelyWrong
-          ?'Done — but speeds exceed a real lacrosse shot. <span class="k">Re-tap Set Scale</span> across a wide known distance.'
-          :!S.summary.calibrated
-            ?'Tracked it — but <span class="k">no scale set</span>. Tap Set Scale for real mph.'
-            :'Analysis complete · peak <span class="k">'+conv(S.summary.peakMs).toFixed(1)+'</span> '+unitLabel(),3400);
+      S.cov={dur:d,to:covered,frames}; // diagnostic: detected clip length vs how far we analyzed
+      const covLine='Clip <span class="k">'+fmt(d)+'</span> · analyzed <span class="k">'+fmt(covered)+'</span> · '+frames+'f';
+      const tail=(cut&&covered<d-1)?'⚠ hit the time limit — trim closer to the play for the full read.'
+        :S.summary.scaleLikelyWrong?'speeds exceed a real shot — <span class="k">re-tap Set Scale</span> wide.'
+        :!S.summary.calibrated?'<span class="k">no scale set</span> — tap Set Scale for real mph.'
+        :'peak <span class="k">'+conv(S.summary.peakMs).toFixed(1)+'</span> '+unitLabel();
+      flash(covLine+'\n'+tail,4200);
     }
   }catch(e){
     flash('Analysis hit a snag — try a shorter clip.',2600);
@@ -1375,10 +1386,11 @@ function renderSummary(){
   const badge=document.getElementById('sumConf');
   badge.textContent=nocal?'NO SCALE':bad?'CHECK SCALE':s.quality.label;
   badge.className='conf '+((bad||nocal)?'low':s.quality.label.toLowerCase());
-  document.getElementById('sumNote').textContent=
-    bad?'Reading exceeds a real lacrosse speed — re-tap Set Scale across a known distance.'
+  const baseNote=bad?'Reading exceeds a real lacrosse speed — re-tap Set Scale across a known distance.'
     :nocal?'No scale set — tap Set Scale for real mph.'
     :(s.quality.reasons[0]||'speed over clip · 2D image-plane');
+  const cov=S.cov?('analyzed '+fmt(S.cov.to)+' of '+fmt(S.cov.dur)+' · '+S.cov.frames+' frames'):'';
+  document.getElementById('sumNote').innerHTML=(cov?cov+' · ':'')+baseNote;
   document.getElementById('summaryCard').classList.add('show');
 }
 function drawSparkline(){
@@ -1613,7 +1625,7 @@ function bindTransport(){
   scrub.addEventListener('pointerdown',start);
   scrub.addEventListener('pointerup',end);
   scrub.addEventListener('pointercancel',end);
-  scrub.oninput=()=>{const d=video.duration||0;try{video.currentTime=(scrub.value/1000)*d;}catch(e){}S.lastT=0;};
+  scrub.oninput=()=>{const d=clipDuration()||video.duration||0;try{video.currentTime=(scrub.value/1000)*d;}catch(e){}S.lastT=0;};
   video.onended=()=>{bPlay.textContent='▶';};
 }
 function newClip(){
@@ -1647,7 +1659,7 @@ function loop(){
       if(S.calStage)drawCal();else{drawCandidates();drawPlayers();drawTarget();}
     }
     if(S.source==='file'&&!S.scrubbing){
-      const d=isFinite(video.duration)&&video.duration>0?video.duration:0;
+      const d=clipDuration()||0;
       document.getElementById('scrub').value=d?(video.currentTime/d*1000)|0:0;
       document.getElementById('tcode').textContent=fmt(video.currentTime)+' / '+fmt(d);
     }
