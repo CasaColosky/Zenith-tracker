@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260620g · multi-clip highlight reel (clip library + cross-clip stitch) (film still + name/number) -->
+<!-- Z-BUILD: bcast-hl-20260621h · game audio in exported highlight video (film still + name/number) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -210,7 +210,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-g</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-h</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -1215,10 +1215,26 @@ function canRecordReel(){
     return {supported:false};
   }catch(e){return {supported:false};}
 }
+let _audioCtx=null,_audioSrc=null,_audioDest=null;
+// Tap the (muted) file <video>'s audio so the EXPORTED clip has game sound while the UI stays silent.
+// createMediaElementSource routes audio through the graph; we deliberately do NOT connect to
+// ctx.destination, so playback stays silent but the recording stream gets the audio. Bound to the
+// element (survives src-swaps across multi-clip reels). Best-effort — null ⇒ record video-only.
+function reelAudioTrack(){
+  try{
+    const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return null;
+    if(!_audioCtx)_audioCtx=new AC();
+    if(_audioCtx.state==='suspended'){try{_audioCtx.resume();}catch(e){}}
+    if(!_audioSrc){_audioSrc=_audioCtx.createMediaElementSource(video);_audioDest=_audioCtx.createMediaStreamDestination();_audioSrc.connect(_audioDest);}
+    return (_audioDest.stream.getAudioTracks()||[])[0]||null;
+  }catch(e){return null;}
+}
 function startReelRecorder(){
   if(S.source!=='file')return;
   const cap=canRecordReel();if(!cap.supported)return; // fall back to screen-record tip
   let stream;try{stream=cv.captureStream(30);}catch(e){return;}
+  S.reel.hasAudio=false; // add game audio to the recording if we can (UI stays muted)
+  try{const at=reelAudioTrack();if(at){stream.addTrack(at);S.reel.hasAudio=true;}}catch(e){}
   let rec;try{rec=new MediaRecorder(stream,{mimeType:cap.mime,videoBitsPerSecond:2500000});}
   catch(e){try{rec=new MediaRecorder(stream);}catch(e2){try{stream.getTracks().forEach(t=>t.stop());}catch(e3){}return;}}
   const chunks=[],mime=rec.mimeType||cap.mime;
@@ -1249,7 +1265,7 @@ function exportReelBlob(){
     try{if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:'Faceoff IQ highlights'});return;}}
     catch(e){if(e&&e.name==='AbortError')return;}
     const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=file.name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),4000);
-    flash('Saved — silent clip',1600);
+    flash(S.reel.hasAudio?'Saved highlight clip':'Saved — silent clip',1600);
   })();
 }
 function startReel(playerId){
