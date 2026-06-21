@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260621m · stray tap saves the reel (no silent discard) + recorder-leak + tap-seam fixes (film still + name/number) -->
+<!-- Z-BUILD: bcast-hl-20260621n · long clips: analyze a dense ~42s window at the scrub point (short clips unchanged) (film still + name/number) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -215,7 +215,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-m</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-n</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -1747,6 +1747,7 @@ async function analyzePass(){
     document.getElementById('summaryCard').classList.remove('show');
     document.getElementById('breakdownCard').classList.remove('show');
     video.pause();
+    const anchorT=video.currentTime||0; // capture the user's scrub position BEFORE autoCalibrate seeks away
     let d=clipDuration();if(!d)d=await ensureDuration();S.clipDur=d; // robust length so the END isn't dropped
     if(!d){flash('Could not read clip length',2000);return;}
     if(!S.ppm){ // no manual scale → auto-estimate from player size, zero setup
@@ -1754,13 +1755,20 @@ async function analyzePass(){
       const a=await autoCalibrate(d);
       if(a&&S.analyzing){S.ppm=a;S.autoScale=true;updateScaleReadout();}
     }
+    // LONG CLIP: a full game can't be densely analyzed on a phone (ball tracking needs close frames).
+    // Above a threshold, analyze a dense ~WIN_SEC window anchored where the user SCRUBBED — they jump
+    // to a play and get it; short clips are unchanged (whole clip, winStart=0/winEnd=d).
+    const LONG_CLIP=75, WIN_SEC=42;
+    let winStart=0,winEnd=d;
+    if(d>LONG_CLIP){winStart=Math.max(0,Math.min(d-WIN_SEC,anchorT-6));winEnd=Math.min(d,winStart+WIN_SEC);
+      flash('Long clip ('+fmt(d)+') — analyzing ~'+WIN_SEC+'s from <span class="k">'+fmt(winStart)+'</span>. Scrub to another play and Analyze again.',5400);}
     // DYNAMIC time-paced sampling: after each frame, stretch the step so the REST of the clip
     // fits the remaining frame + wall-clock budget. The clip END is always reached — dense on a
     // fast device, coarser on a slow one — instead of truncating the tail at a hard cap.
     const MAX_FRAMES=220, MAX_MS=55000, MIN_STEP=1/15;
     const t0=(performance&&performance.now)?performance.now():0;
-    let cut=false,frames=0,covered=0,t=0,step=MIN_STEP;
-    while(t<=d+1e-3&&S.analyzing&&frames<MAX_FRAMES){
+    let cut=false,frames=0,covered=0,t=winStart,step=MIN_STEP;
+    while(t<=winEnd+1e-3&&S.analyzing&&frames<MAX_FRAMES){
       const mt=await seekTo(t);
       if(!S.analyzing)break; // aborted (New Clip / mode switch) mid-seek
       if(video.readyState>=2){
@@ -1792,9 +1800,10 @@ async function analyzePass(){
         S.speedSeries.push(S.fitV);if(S.speedSeries.length>1500)S.speedSeries.shift();
         frames++;covered=mt;
       }
-      S.analyzePct=d?Math.min(1,t/d):1;updateProgress();
+      S.analyzePct=Math.min(1,(t-winStart)/Math.max(0.001,winEnd-winStart));updateProgress();
       await new Promise(r=>setTimeout(r,0)); // yield so the UI stays responsive
-      const tLeft=d-t;if(tLeft<=1e-3)break;                  // reached the clip end
+      const tLeft=winEnd-t;if(tLeft<=1e-3)break;             // reached the window end
+
       const elapsed=t0?performance.now()-t0:0,avg=elapsed/Math.max(1,frames);
       const byTime=(MAX_MS-elapsed)/Math.max(avg,1),byCount=MAX_FRAMES-frames; // frames still affordable
       const framesLeft=Math.min(byTime,byCount);
