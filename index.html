@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260621i · auto-editor: build-to-climax + slow-mo + double-tap mark + outro card (film still + name/number) -->
+<!-- Z-BUILD: bcast-hl-20260621j · dramatic slow-mo (0.35x, long) + punch-in zoom on the climax (film still + name/number) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -215,7 +215,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-i</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-j</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -1186,15 +1186,15 @@ function curateReel(rawSegs,opts){
   // order: build-to-climax (chronological, but the single best peak LAST) or chronological
   sel.sort((a,b)=>(a.clipId===b.clipId?a.start-b.start:0));
   sel.sort((a,b)=>a.start-b.start);
-  if(order==='climax'&&sel.length>1){
+  if(order==='climax'&&sel.length>=1){ // mark the best play as the climax — even a 1-play reel gets the slow finish
     let bi=0;for(let i=1;i<sel.length;i++)if((sel[i].peak||0)>(sel[bi].peak||0))bi=i;
     const climax=sel.splice(bi,1)[0];climax._climax=true;sel.push(climax);
   }
-  // slow-mo sub-window on the climax (around the ball-strike tPeak), strictly inside the clip
+  // slow-mo on the climax: a LONG dramatic finish — from ~0.6s before the ball-strike to the end of the play
   if(slowmo){const c=sel[sel.length-1];if(c&&c._climax){
-    const lo=c.start+0.3,hi=c.end-0.5,tp=Math.max(lo,Math.min(hi,(c.tPeak!=null?c.tPeak:(c.start+c.end)/2)));
-    const a=Math.max(lo,tp-0.5),b=Math.min(hi,tp+0.7);
-    if(b>a){c._smStart=a;c._smEnd=b;}}}
+    const lo=c.start+0.3,hi=c.end-0.4,tp=Math.max(lo,Math.min(hi,(c.tPeak!=null?c.tPeak:(c.start+c.end)/2)));
+    const a=Math.max(lo,tp-0.6),b=hi;
+    if(b>a+0.2){c._smStart=a;c._smEnd=b;}}}
   return sel;
 }
 /* ===== multi-clip highlight reel: a session library of analyzed clips, stitched by kid name ===== */
@@ -1398,7 +1398,7 @@ function endReel(done){
   if(S.selectedPlayer!=null)renderPlayerCard();
 }
 function updateSlowMo(seg){ // ramp to 0.5x inside the climax's slow-mo window, 1x otherwise
-  const want=(seg&&seg._smStart!=null&&video.currentTime>=seg._smStart&&video.currentTime<=seg._smEnd)?0.5:1;
+  const want=(seg&&seg._smStart!=null&&video.currentTime>=seg._smStart&&video.currentTime<=seg._smEnd)?0.35:1;
   try{if(Math.abs((video.playbackRate||1)-want)>0.01)video.playbackRate=want;}catch(e){}
 }
 function advanceReel(){ // driven every frame from loop()
@@ -1536,7 +1536,7 @@ function drawBroadcast(){
     drawBug();ctx.restore();return;
   }
   const m=selectedMarker(); // spotlight ring on #40's feet
-  if(m){
+  if(m&&(video.playbackRate||1)>=1){ // ring off during the zoomed slow-mo (video is scaled, ring would misalign)
     const ph=0.5+0.5*Math.sin(performance.now()/1000*4);
     const fx=m.x,fy=m.y+Math.max(28*DPR,m.h)/2,rw=Math.max(22*DPR,m.w*0.95),rh=rw*0.32;
     ctx.lineWidth=(2.4+ph*1.8)*DPR;ctx.strokeStyle=ringColOf(teamId);ctx.globalAlpha=0.6+0.32*ph;
@@ -2130,8 +2130,14 @@ function loop(){
   try{ // crash-proof: a draw error must never halt rendering (that's a frozen screen)
     advanceReel();
     if(S.reel.on&&performance.now()<S.reel.wipeUntil){if(S._freeze)ctx.drawImage(S._freeze,0,0);} // hold last frame during a clip-swap
-    else if(video.readyState>=2)ctx.drawImage(video,cover.dx,cover.dy,cover.dw,cover.dh);
-    if(S.reel.on){drawPlayers();drawBroadcast();}
+    else if(video.readyState>=2){
+      const slow=S.reel.on&&(video.playbackRate||1)<1; // PUNCH-IN zoom on the slow-mo climax
+      if(slow){const m=selectedMarker(),zx=m?m.x:CW/2,zy=m?m.y:CH/2;
+        ctx.save();ctx.translate(zx,zy);ctx.scale(1.35,1.35);ctx.translate(-zx,-zy);
+        ctx.drawImage(video,cover.dx,cover.dy,cover.dw,cover.dh);ctx.restore();}
+      else ctx.drawImage(video,cover.dx,cover.dy,cover.dw,cover.dh);
+    }
+    if(S.reel.on){if((video.playbackRate||1)>=1)drawPlayers();drawBroadcast();} // boxes off during the zoomed slow-mo
     else{
       if(S.showHeat)drawHeat();
       if(S.showTrail)drawTrail();
