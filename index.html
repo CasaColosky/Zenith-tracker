@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260620e · one-tap pick-your-kid + hero keepsake share card (film still + name/number) -->
+<!-- Z-BUILD: bcast-hl-20260620f · camera ego-motion (accurate mph) + save reel as video (film still + name/number) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -202,7 +202,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-e</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-f</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -269,6 +269,7 @@
       <button class="shbtn alt" id="bReel">▶ Highlights</button>
       <button class="shbtn" id="bSharePlayer">Share ⤴</button>
     </div>
+    <button class="shbtn" id="bSaveVid" hidden style="margin-top:8px">⤓ Save highlight video</button>
   </div>
 
   <div id="reelBar"><span class="dot">●</span><span id="reelTxt">HIGHLIGHTS</span><button id="reelStop">■ Stop</button></div>
@@ -378,7 +379,8 @@ const S={
   selectedPlayer:null, players:[], showPlayers:true, playerNames:{},
   fieldActive:false, fieldFrames:0, fieldHits:0,                 // in-play (green-field) filter telemetry
   clipDur:0, cov:null,                                            // detected clip length + analyzed-coverage diagnostic
-  reel:{on:false,segs:[],i:0,playerId:null,intro:0,flash:0,flashV:0},// #40 highlight reel state
+  cameraMotion:[], egoUncorrected:0, curGray:null, egoBad:false,  // per-frame cumulative camera offset (ego-motion comp) + telemetry
+  reel:{on:false,segs:[],i:0,playerId:null,intro:0,flash:0,flashV:0,recorder:null,stream:null,blob:null,chunks:null},// #40 highlight reel + video export state
   teams:{}, teamLabels:{}, teamsUnclear:true, teamConf:'LOW', teamFilter:'all',
   lastT:0, startT:0, maxV:0, distM:0, smoothV:0, unit:'mph',
   trail:[], showTrail:false, showHeat:false, heat:null, HX:48, HY:0,
@@ -594,7 +596,7 @@ function resetTrajectory(){
   S.trail=[];S.fitSamples=[];S.win=[];S.clampHits=0;S.clampTotal=0;S.trackValid=0;S.trackTotal=0;
   S.tracks=[];S.nextTrackId=1;S.trackArchive=[];S.ball=null;S.ballTrack=[];
   S.selectedPlayer=null;S.players=[];S.playerNames={};S.teams={};S.teamLabels={};S.teamsUnclear=true;S.teamConf='LOW';
-  S.reel={on:false,segs:[],i:0,playerId:null,intro:0,flash:0,flashV:0};
+  S.reel={on:false,segs:[],i:0,playerId:null,intro:0,flash:0,flashV:0,recorder:null,stream:null,blob:null,chunks:null,recording:false,wantSave:false};
   if(S.heat)S.heat.fill(0);
 }
 function hidePlayerUI(){
@@ -680,10 +682,21 @@ function robustPeak(arr){
 }
 // least-squares velocity over a short rolling window of {t(s),x,y} → {vx,vy} px/s.
 // far steadier than a 2-point difference: one bad detection barely shifts the slope.
-function fitVelocity(win){
+// cumulative camera image-offset (VIEW px) at clip time t, linearly interpolated. Empty ⇒ {0,0}.
+function lookupCameraOffset(t){
+  const a=S.cameraMotion;if(!a||!a.length)return {dx:0,dy:0};
+  if(t<=a[0].t)return {dx:a[0].dx,dy:a[0].dy};
+  const last=a[a.length-1];if(t>=last.t)return {dx:last.dx,dy:last.dy};
+  for(let i=1;i<a.length;i++)if(a[i].t>=t){const p=a[i-1],q=a[i],f=(t-p.t)/((q.t-p.t)||1);return {dx:p.dx+(q.dx-p.dx)*f,dy:p.dy+(q.dy-p.dy)*f};}
+  return {dx:0,dy:0};
+}
+// least-squares velocity over a window. stab=true ⇒ subtract camera ego-motion first (stabilized frame).
+function fitVelocity(win,stab){
   const n=win.length;if(n<2)return null;
   let st=0,stt=0,sx=0,sy=0,stx=0,sty=0;const t0=win[0].t;
-  for(const p of win){const t=p.t-t0;st+=t;stt+=t*t;sx+=p.x;sy+=p.y;stx+=t*p.x;sty+=t*p.y;}
+  for(const p of win){const t=p.t-t0;let x=p.x,y=p.y;
+    if(stab){const o=lookupCameraOffset(p.t);x-=o.dx;y-=o.dy;}
+    st+=t;stt+=t*t;sx+=x;sy+=y;stx+=t*x;sty+=t*y;}
   const den=n*stt-st*st;if(den<=1e-9)return null; // identical timestamps (stalled seek)
   return {vx:(n*stx-st*sx)/den, vy:(n*sty-st*sy)/den};
 }
@@ -900,6 +913,7 @@ function trackQuality(tr,m){
   const t=TYP.player,inBand=(m.peak>=t[0]*0.5&&m.peak<=t[1]*1.1);if(!inBand&&S.ppm)reasons.push('peak outside typical range');
   let score=0.35*cont+0.2*Math.min(1,m.nOk/20)+0.3*scaleScore+0.15*(inBand?1:0.3)-0.25*coastFrac;
   if(S.autoScale)score=Math.min(score,0.62);
+  if(S.egoBad){score=Math.min(score,0.62);reasons.push('camera motion not corrected');}
   if(!S.ppm)score=Math.min(score,0.30);
   score=Math.max(0,score);
   return{label:score>=0.66?'HIGH':score>=0.4?'MED':'LOW',reasons};
@@ -917,7 +931,7 @@ function buildPlayerStats(){
       win.push({t:p.t,x:p.x,y:p.y});
       while(win.length&&p.t-win[0].t>WIN_T_MAX)win.shift();
       if(win.length>WIN_N)win.shift();
-      if(S.ppm&&win.length>=3){const fv=fitVelocity(win);if(fv){totalW++;const v=Math.hypot(fv.vx,fv.vy)/S.ppm;if(v<=ceil){fit.push(v);validW++;}}}
+      if(S.ppm&&win.length>=3){const fv=fitVelocity(win,true);if(fv){totalW++;const v=Math.hypot(fv.vx,fv.vy)/S.ppm;if(v<=ceil){fit.push(v);validW++;}}}
     }
     const topMs=robustPeak(fit);
     let distM=0;
@@ -1023,6 +1037,7 @@ function renderPlayerCard(){
   const td=document.getElementById('pcTeamDot'),tn=document.getElementById('pcTeam');
   if(td&&tn){const on=!S.teamsUnclear&&p.team!=='neutral';td.style.background=on?teamCol(p.id):'transparent';tn.textContent=on?teamLabelOf(p.id):'';}
   renderMoments(p.id);
+  const sv=document.getElementById('bSaveVid');if(sv)sv.hidden=!(S.reel&&S.reel.blob); // a recorded reel video is ready to save
   document.getElementById('breakdownCard').classList.remove('show');
   document.getElementById('summaryCard').classList.remove('show');
   document.getElementById('playerCard').classList.add('show');
@@ -1048,7 +1063,7 @@ function ballSpeedAt(t){ // fitted ball speed (m/s) at clip time t, 0 if unknown
   const win=[];
   for(const b of S.ballTrack){if(b.t>t+0.03)break;if(b.t>=t-WIN_T_MAX)win.push({t:b.t,x:b.x,y:b.y});}
   if(win.length<3)return 0;
-  const fv=fitVelocity(win);if(!fv)return 0;
+  const fv=fitVelocity(win,true);if(!fv)return 0;
   const v=Math.hypot(fv.vx,fv.vy)/S.ppm;return v<=CEIL.ball?v:0;
 }
 function ballPeakBetween(t0,t1){ // robust peak ball speed (m/s) over [t0,t1]
@@ -1059,7 +1074,7 @@ function ballPeakBetween(t0,t1){ // robust peak ball speed (m/s) over [t0,t1]
     win.push({t:b.t,x:b.x,y:b.y});
     while(win.length&&b.t-win[0].t>WIN_T_MAX)win.shift();
     if(win.length>WIN_N)win.shift();
-    if(win.length>=3){const fv=fitVelocity(win);if(fv){const v=Math.hypot(fv.vx,fv.vy)/S.ppm;if(v<=CEIL.ball)fit.push(v);}}
+    if(win.length>=3){const fv=fitVelocity(win,true);if(fv){const v=Math.hypot(fv.vx,fv.vy)/S.ppm;if(v<=CEIL.ball)fit.push(v);}}
   }
   return robustPeak(fit);
 }
@@ -1085,13 +1100,61 @@ function buildHighlights(playerId){
 function showReelBar(){document.getElementById('reelTxt').textContent=nameOf(S.reel.playerId)+' · HIGHLIGHTS '+(S.reel.i+1)+'/'+S.reel.segs.length;document.getElementById('reelBar').classList.add('show');}
 function hideReelBar(){document.getElementById('reelBar').classList.remove('show');}
 function reelSeek(t){try{video.currentTime=Math.max(0,t);}catch(e){}S.lastT=0;}
+/* ----- save the reel as a real video: record the canvas (video + overlay) ----- */
+function canRecordReel(){
+  try{
+    if(typeof MediaRecorder==='undefined'||typeof cv.captureStream!=='function')return {supported:false};
+    const cands=['video/mp4;codecs=avc1','video/mp4','video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'];
+    for(const m of cands){try{if(MediaRecorder.isTypeSupported(m))return {supported:true,mime:m};}catch(e){}}
+    return {supported:false};
+  }catch(e){return {supported:false};}
+}
+function startReelRecorder(){
+  if(S.source!=='file')return;
+  const cap=canRecordReel();if(!cap.supported)return; // fall back to screen-record tip
+  let stream;try{stream=cv.captureStream(30);}catch(e){return;}
+  let rec;try{rec=new MediaRecorder(stream,{mimeType:cap.mime,videoBitsPerSecond:2500000});}
+  catch(e){try{rec=new MediaRecorder(stream);}catch(e2){try{stream.getTracks().forEach(t=>t.stop());}catch(e3){}return;}}
+  const chunks=[],mime=rec.mimeType||cap.mime;
+  rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};
+  rec.onstop=()=>{
+    try{stream.getTracks().forEach(t=>t.stop());}catch(e){}
+    const blob=chunks.length?new Blob(chunks,{type:mime}):null;
+    // iOS can report a supported MIME yet emit a 0-byte/unplayable blob — only surface Save on a real file
+    if(S.reel.wantSave&&blob&&blob.size>=2048){S.reel.blob=blob;const b=document.getElementById('bSaveVid');if(b)b.hidden=false;
+      flash('Clip ready — tap <span class="k">⤓ Save highlight video</span>',3000);}
+    else{S.reel.blob=null;if(S.reel.wantSave)flash('Couldn’t make a file here — screen-record to save it',2800);}
+  };
+  S.reel.recorder=rec;S.reel.stream=stream;S.reel.chunks=chunks;S.reel.recording=true;S.reel.blob=null;
+  try{rec.start();}catch(e){S.reel.recording=false;S.reel.recorder=null;try{stream.getTracks().forEach(t=>t.stop());}catch(e2){}}
+}
+function stopReelRecorder(done){
+  S.reel.wantSave=!!done;
+  const rec=S.reel.recorder;
+  if(rec&&rec.state&&rec.state!=='inactive'){try{rec.stop();}catch(e){}} // onstop tears down the stream + handles blob/UI
+  else if(S.reel.stream){try{S.reel.stream.getTracks().forEach(t=>t.stop());}catch(e){}}
+  S.reel.recorder=null;S.reel.stream=null;S.reel.recording=false;
+}
+function exportReelBlob(){
+  const blob=S.reel.blob;if(!blob){flash('No clip to save yet',1500);return;}
+  const ext=blob.type.indexOf('mp4')>=0?'mp4':'webm';
+  const file=new File([blob],'faceoff-highlights.'+ext,{type:blob.type});
+  (async()=>{
+    try{if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file],title:'Faceoff IQ highlights'});return;}}
+    catch(e){if(e&&e.name==='AbortError')return;}
+    const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=file.name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),4000);
+    flash('Saved — silent clip',1600);
+  })();
+}
 function startReel(playerId){
   if(playerId==null){flash('Tap your player on the video first',1800);return;}
   if(!S.trackArchive.length){flash('Analyze the clip first',1600);return;}
   const segs=buildHighlights(playerId);
   if(!segs.length){flash('No touches for <span class="k">'+nameOf(playerId)+'</span> yet — film the play & Analyze again',2800);return;}
+  stopReelRecorder(false); // tear down any prior recorder before we reassign S.reel
   S.selectedPlayer=playerId;
-  S.reel={on:true,segs,i:0,playerId,intro:performance.now()+1200,flash:0,flashV:0};
+  S.reel={on:true,segs,i:0,playerId,intro:performance.now()+1200,flash:0,flashV:0,recorder:null,stream:null,blob:null,chunks:null,recording:false,wantSave:false};
+  const sv=document.getElementById('bSaveVid');if(sv)sv.hidden=true; // clear a stale Save button
   document.getElementById('playerCard').classList.remove('show');
   document.getElementById('playersPanel').classList.remove('show');
   document.getElementById('bPlayers').classList.remove('on');
@@ -1099,19 +1162,25 @@ function startReel(playerId){
   reelSeek(segs[0].start);
   // play INSIDE the user gesture (iOS blocks deferred autoplay); the intro card just overlays
   video.play().catch(()=>{});document.getElementById('bPlay').textContent='❚❚';
+  startReelRecorder(); // record the canvas (video + overlay) to a real file, if the browser supports it
 }
-function playMoment(seg){ // play a single touch (no intro card — snappier)
+function playMoment(seg){ // play a single touch (no intro card — snappier; NOT recorded in v1)
   if(!seg)return;
-  S.reel={on:true,segs:[seg],i:0,playerId:S.selectedPlayer,intro:0,flash:0,flashV:0};
+  stopReelRecorder(false);
+  S.reel={on:true,segs:[seg],i:0,playerId:S.selectedPlayer,intro:0,flash:0,flashV:0,recorder:null,stream:null,blob:null,chunks:null,recording:false,wantSave:false};
   document.getElementById('playerCard').classList.remove('show');
   showReelBar();reelSeek(seg.start);video.play().catch(()=>{});document.getElementById('bPlay').textContent='❚❚';
 }
 function endReel(done){
   if(!S.reel.on)return;
-  const pid=S.reel.playerId;S.reel.on=false;S.reel.segs=[];S.reel.intro=0;
+  const pid=S.reel.playerId,wasRec=S.reel.recording;S.reel.on=false;S.reel.segs=[];S.reel.intro=0;
+  stopReelRecorder(done); // async: onstop reveals ⤓ Save or falls back to the screen-record tip
   try{video.pause();}catch(e){}document.getElementById('bPlay').textContent='▶';
   hideReelBar();
-  if(done)flash('That’s the reel for <span class="k">'+nameOf(pid)+'</span> · screen-record to save & text it',3400);
+  if(done){
+    if(wasRec)flash('Rendering <span class="k">'+nameOf(pid)+'</span>’s clip…',2200); // onstop posts the result
+    else flash('That’s the reel for <span class="k">'+nameOf(pid)+'</span> · screen-record to save & text it',3400);
+  }
   if(S.selectedPlayer!=null)renderPlayerCard();
 }
 function advanceReel(){ // driven every frame from loop()
@@ -1128,7 +1197,8 @@ function advanceReel(){ // driven every frame from loop()
 }
 function toggleReel(){if(S.reel.on)endReel(false);else startReel(S.selectedPlayer);}
 function stopReelQuiet(){ // teardown paths: kill the reel without flashing or re-rendering the card
-  if(!S.reel.on)return;S.reel.on=false;S.reel.segs=[];S.reel.intro=0;
+  if(!S.reel.on){stopReelRecorder(false);return;}S.reel.on=false;S.reel.segs=[];S.reel.intro=0;
+  stopReelRecorder(false); // mode-switch/new-clip/reset must not leak a running recorder + live tracks
   try{video.pause();}catch(e){}hideReelBar();const b=document.getElementById('bPlay');if(b)b.textContent='▶';}
 /* ----- broadcast canvas overlay ----- */
 function roundRect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
@@ -1332,6 +1402,67 @@ async function shareCard(kind){
     flash('Saved card',1400);
   },'image/png');
 }
+// Estimate global CAMERA translation (analysis px) between two grayscale frames by block-matching
+// a sparse grid of BACKGROUND patches (player boxes excluded). Returns {dx,dy,ok}; ok=false ⇒ no
+// reliable translation (low texture / coherent motion / zoom) ⇒ caller holds last offset.
+function estimateCameraMotion(prev,curr,persons){
+  const W=AW,H=AH,R=20,WIN=6; // ±20px search, 12x12 patch (half=6)
+  const sxv=AW/CW,syv=AH/CH,boxes=[];
+  if(persons)for(const p of persons){const cx=p.x*sxv,cy=p.y*syv,hw=p.w*sxv/2+24,hh=p.h*syv/2+24;boxes.push([cx-hw,cy-hh,cx+hw,cy+hh]);}
+  const inBox=(x,y)=>{for(const b of boxes)if(x>=b[0]&&x<=b[2]&&y>=b[1]&&y<=b[3])return true;return false;};
+  const ssd=(cx,cy,dx,dy,best)=>{let s=0;
+    for(let yy=-WIN;yy<=WIN;yy+=2)for(let xx=-WIN;xx<=WIN;xx+=2){
+      const px=cx+xx,py=cy+yy,qx=px+dx,qy=py+dy;
+      if(qx<0||qy<0||qx>=W||qy>=H){s+=65025;continue;}
+      const d=prev[py*W+px]-curr[qy*W+qx];s+=d*d;if(s>best)return s;}
+    return s;};
+  const GX=5,GY=5,cells=[];
+  for(let gy=0;gy<GY;gy++)for(let gx=0;gx<GX;gx++){
+    const cx=Math.round((gx+0.5)/GX*W),cy=Math.round((gy+0.5)/GY*H);
+    if(cx<R+WIN||cy<R+WIN||cx>=W-R-WIN||cy>=H-R-WIN||inBox(cx,cy))continue;
+    let m=0,m2=0,nn=0;
+    for(let yy=-WIN;yy<=WIN;yy+=2)for(let xx=-WIN;xx<=WIN;xx+=2){const v=curr[(cy+yy)*W+(cx+xx)];m+=v;m2+=v*v;nn++;}
+    if(m2/nn-(m/nn)*(m/nn)<25)continue; // low-texture patch ⇒ unreliable
+    let bdx=0,bdy=0,bs=Infinity;
+    for(let dy=-R;dy<=R;dy+=2)for(let dx=-R;dx<=R;dx+=2){const s=ssd(cx,cy,dx,dy,bs);if(s<bs){bs=s;bdx=dx;bdy=dy;}}
+    for(let dy=bdy-1;dy<=bdy+1;dy++)for(let dx=bdx-1;dx<=bdx+1;dx++){const s=ssd(cx,cy,dx,dy,bs);if(s<bs){bs=s;bdx=dx;bdy=dy;}}
+    cells.push({cx,cy,dx:bdx,dy:bdy});
+  }
+  if(cells.length<6)return {dx:0,dy:0,ok:false};
+  const med=a=>{const s=a.slice().sort((p,q)=>p-q);return s[s.length>>1];};
+  let mdx=med(cells.map(c=>c.dx)),mdy=med(cells.map(c=>c.dy));
+  const inl=cells.filter(c=>Math.hypot(c.dx-mdx,c.dy-mdy)<=4);
+  if(inl.length<6)return {dx:0,dy:0,ok:false};
+  const cxm=W/2,cym=H/2,q=new Set();for(const c of inl)q.add((c.cx>=cxm?1:0)+'-'+(c.cy>=cym?1:0));
+  if(q.size<2)return {dx:0,dy:0,ok:false}; // not spread ⇒ likely a moving cluster, not the field
+  mdx=med(inl.map(c=>c.dx));mdy=med(inl.map(c=>c.dy));
+  const avg=(arr,k)=>arr.length?arr.reduce((s,c)=>s+c[k],0)/arr.length:0;
+  const L=inl.filter(c=>c.cx<cxm),Rr=inl.filter(c=>c.cx>=cxm),T=inl.filter(c=>c.cy<cym),B=inl.filter(c=>c.cy>=cym);
+  if(Math.abs(avg(Rr,'dx')-avg(L,'dx'))>6||Math.abs(avg(B,'dy')-avg(T,'dy'))>6)return {dx:0,dy:0,ok:false}; // zoom/rotation
+  return {dx:mdx,dy:mdy,ok:true};
+}
+function testEgoMotion(){ // pure self-test (no video/taps) for the ego-motion math
+  const W=AW,H=AH;
+  const hash=(x,y)=>{let h=Math.imul(x+1,2654435761)^Math.imul(y+1,2246822519);h^=h>>>15;h=Math.imul(h,2246822519);h^=h>>>13;return (h>>>0)&255;};
+  const tex=()=>{const a=new Float32Array(W*H);for(let y=0;y<H;y++)for(let x=0;x<W;x++)a[y*W+x]=hash(x,y);return a;};
+  const shift=(s,sx,sy)=>{const a=new Float32Array(W*H);for(let y=0;y<H;y++)for(let x=0;x<W;x++){const px=x-sx,py=y-sy;a[y*W+x]=(px>=0&&py>=0&&px<W&&py<H)?s[py*W+px]:0;}return a;};
+  const prev=tex();
+  const r1=estimateCameraMotion(prev,shift(prev,6,-4),[]);
+  const okShift=!!(r1.ok&&Math.abs(r1.dx-6)<=1&&Math.abs(r1.dy+4)<=1);
+  const r2=estimateCameraMotion(new Float32Array(W*H).fill(128),new Float32Array(W*H).fill(128),[]);
+  const okFlat=r2.ok===false;
+  const r3=estimateCameraMotion(prev,shift(prev,3,0),[{x:CW/2,y:CH/2,w:CW*1.5,h:CH*1.5}]);
+  const okCovered=r3.ok===false;
+  S.cameraMotion=[];const e0=lookupCameraOffset(1).dx===0;
+  S.cameraMotion=[{t:0,dx:0,dy:0},{t:1,dx:10,dy:20}];const mid=lookupCameraOffset(0.5);
+  const okInterp=Math.abs(mid.dx-5)<0.01&&Math.abs(mid.dy-10)<0.01;
+  S.cameraMotion=[{t:0,dx:0,dy:0},{t:1,dx:100,dy:0}];
+  const win=[{t:0,x:50,y:50},{t:0.5,x:100,y:50},{t:1,x:150,y:50}];
+  const raw=fitVelocity(win),stab=fitVelocity(win,true);
+  const okStab=!!(raw&&stab&&Math.abs(raw.vx-100)<1&&Math.abs(stab.vx)<1);
+  S.cameraMotion=[];
+  return {okShift,okFlat,okCovered,e0,okInterp,okStab,dx:r1.dx,dy:r1.dy,raw:raw&&+raw.vx.toFixed(1),stab:stab&&+stab.vx.toFixed(1)};
+}
 async function analyzePass(){
   if(S.analyzing)return;
   if(!model){flash('Model still loading…',1500);return;}
@@ -1342,6 +1473,7 @@ async function analyzePass(){
     const keep=(S.mode==='player'&&S.target)?{...S.target}:null;
     resetTrajectory();if(keep)S.target=keep;
     resetBallTracker();S.maxPersons=0;S.personCounts=[];S.speedSeries=[];S.breakdown=null;
+    S.cameraMotion=[];S.egoUncorrected=0;egoPrevGray=null; // reset camera ego-motion accumulator
     document.getElementById('summaryCard').classList.remove('show');
     document.getElementById('breakdownCard').classList.remove('show');
     video.pause();
@@ -1368,8 +1500,18 @@ async function analyzePass(){
         const frameImg=actx.getImageData(0,0,AW,AH).data;     // ONE read, shared by color + ball motion
         const persons=dedupPersons(preds,frameImg);           // attaches jersey-color descriptor
         trackPersons(persons,mt);                             // persistent player ids (color-aware)
-        await ballAnalyzeFrame(mtMs,{sharedPreds:preds,sharedImg:frameImg,persons}); // sets S.ball; reuses frameImg; persons gate the in-play region
+        await ballAnalyzeFrame(mtMs,{sharedPreds:preds,sharedImg:frameImg,persons}); // sets S.ball; sets S.curGray; reuses frameImg; persons gate the in-play region
         if(S.ball)S.ballTrack.push({t:mt,x:S.ball.x,y:S.ball.y});
+        // camera ego-motion: cumulative background shift (VIEW px), subtracted from speeds so a pan doesn't inflate mph
+        if(S.curGray){
+          const last=S.cameraMotion.length?S.cameraMotion[S.cameraMotion.length-1]:{dx:0,dy:0};
+          if(!egoPrevGray)S.cameraMotion.push({t:mt,dx:0,dy:0}); // reference frame
+          else{const near=t0&&(performance.now()-t0)>MAX_MS*0.85; // protect coverage on a slow phone
+            const r=near?{ok:false}:estimateCameraMotion(egoPrevGray,S.curGray,persons);
+            if(r.ok)S.cameraMotion.push({t:mt,dx:last.dx+r.dx*(CW/AW),dy:last.dy+r.dy*(CH/AH)});
+            else{S.cameraMotion.push({t:mt,dx:last.dx,dy:last.dy});S.egoUncorrected++;}}
+          egoPrevGray=S.curGray;
+        }
         S.dets=persons;
         if(S.mode==='ball'){                                  // speed metric locks the ball
           if(S.ball){const prev=S.target||S.ball;S.target=S.ball;measure(mtMs,prev,S.target);}
@@ -1389,6 +1531,7 @@ async function analyzePass(){
       if(framesLeft<1){cut=true;break;}                      // out of budget before the end
       step=Math.max(MIN_STEP,tLeft/framesLeft);t+=step;
     }
+    S.egoBad=frames>0&&S.egoUncorrected/frames>0.4; // too many frames couldn't be camera-stabilized
     for(const tr of S.tracks)if(tr.confirmed&&S.trackArchive.length<60)S.trackArchive.push(tr);
     try{buildTeamModel();}catch(e){S.teamsUnclear=true;} // cluster tracks into 2 teams by jersey color
     if(S.analyzing){
@@ -1402,7 +1545,7 @@ async function analyzePass(){
         :S.summary.scaleLikelyWrong?'speeds exceed a real shot — <span class="k">re-tap Set Scale</span> wide.'
         :!S.summary.calibrated?'<span class="k">no scale set</span> — tap Set Scale for real mph.'
         :'peak <span class="k">'+conv(S.summary.peakMs).toFixed(1)+'</span> '+unitLabel();
-      flash(covLine+'\n'+tail+'\n👆 <span class="k">Tap your kid on the video</span> → name → ▶ reel',5200);
+      flash(covLine+(S.egoBad?' · <span class="k">camera motion not corrected</span>':'')+'\n'+tail+'\n👆 <span class="k">Tap your kid on the video</span> → name → ▶ reel',5200);
     }
   }catch(e){
     flash('Analysis hit a snag — try a shorter clip.',2600);
@@ -1441,6 +1584,7 @@ function computeQuality(peak){
   if(!inBand&&S.ppm)reasons.push('peak outside typical range');
   let score=0.35*cont+0.2*Math.min(1,nOk/20)+0.3*scaleScore+0.15*(inBand?1:0.3);
   if(S.autoScale){score=Math.min(score,0.62);reasons.push('auto scale — approximate');}
+  if(S.egoBad){score=Math.min(score,0.62);reasons.push('camera motion not corrected');}
   if(!S.ppm)score=Math.min(score,0.3);
   const label=score>=0.66?'HIGH':score>=0.4?'MED':'LOW';
   return{score:+score.toFixed(2),label,reasons};
@@ -1565,7 +1709,8 @@ const DIFF_T=22,FRAMEDIFF_T=18,BG_ALPHA=0.05;
 const BLOB_MIN_PX=4,BLOB_MAX_PX=900,BLOB_MIN_W=2,BLOB_MAX_W=70,BLOB_MAX_AR=6,FILL_MIN=0.30;
 const SPEED_MIN=5,COAST_MAX=8,GATE_BASE=36,GATE_VEL_K=1.4;
 let ballBg=null,ballPrev=null,trk=null,seedCache=null,ballFrame=0;
-function resetBallTracker(){ballBg=null;ballPrev=null;trk=null;seedCache=null;ballFrame=0;}
+let egoPrevGray=null; // previous analyzed frame's grayscale, for camera ego-motion (NOT ballPrev — that gets overwritten)
+function resetBallTracker(){ballBg=null;ballPrev=null;trk=null;seedCache=null;ballFrame=0;egoPrevGray=null;}
 function toGray(data){
   const n=data.length>>2,g=new Float32Array(n);
   for(let i=0,j=0;i<n;i++,j+=4)g[i]=0.299*data[j]+0.587*data[j+1]+0.114*data[j+2];
@@ -1601,7 +1746,7 @@ function connectedComponents(mask,W,H){
 async function ballAnalyzeFrame(mtMs,opts){
   opts=opts||{};const shared=opts.sharedPreds;
   const img=opts.sharedImg||actx.getImageData(0,0,AW,AH).data;
-  const gray=toGray(img);
+  const gray=toGray(img);S.curGray=gray; // reused by ego-motion so it doesn't re-grayscale the frame
   if(ballBg&&ballBg.length!==gray.length)resetBallTracker(); // geometry changed mid-pass → reseed
   let preds=null;
   if(shared)preds=shared;                                    // breakdown: reuse the frame's detect
@@ -1907,6 +2052,7 @@ document.getElementById('bPlayers').onclick=function(){const o=document.getEleme
 document.getElementById('plBack').onclick=clearPlayerSelection;
 document.getElementById('bSharePlay').onclick=()=>shareCard('play');
 document.getElementById('bSharePlayer').onclick=()=>shareCard('player');
+document.getElementById('bSaveVid').onclick=exportReelBlob;
 document.getElementById('bReel').onclick=toggleReel;
 document.getElementById('reelStop').onclick=()=>endReel(false);
 document.getElementById('bUnit').onclick=function(){
