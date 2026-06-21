@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260620f · camera ego-motion (accurate mph) + save reel as video (film still + name/number) -->
+<!-- Z-BUILD: bcast-hl-20260620g · multi-clip highlight reel (clip library + cross-clip stitch) (film still + name/number) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -133,6 +133,14 @@
     background:var(--warn);color:#fff;border:0;border-radius:20px;padding:6px 12px;cursor:pointer;font-weight:700}
   #reelBar #reelStop:active{transform:scale(.95)}
   .plays.players{width:190px}
+  .plays.reellib{width:190px;top:auto;bottom:118px}
+  .reellib .rlrow{display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer;
+    border-top:1px solid rgba(255,255,255,.08);padding:8px 0;font-size:10px;color:var(--dim)}
+  .reellib .rlrow b{color:var(--ink);font-size:13px}
+  .reellib .rlrow:active{transform:scale(.98)}.reellib .rlrow .rlgo{color:var(--accent);font-weight:700;white-space:nowrap}
+  .reellib .empty{font-size:9px;color:var(--dim);letter-spacing:.06em;line-height:1.5;padding:4px 0}
+  .reellib .rlclear{width:100%;margin-top:8px;font-family:var(--mono);font-size:8px;letter-spacing:.14em;text-transform:uppercase;
+    background:transparent;color:var(--dim);border:1px solid rgba(255,255,255,.12);border-radius:3px;padding:6px;cursor:pointer}
   .pcount{font-size:8px;letter-spacing:.14em;color:var(--dim)}
   .pl.row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;cursor:pointer}
   .pl.row b{font-size:14px}
@@ -202,7 +210,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-f</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-g</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -252,6 +260,8 @@
   <div class="plays players" id="playersPanel"><h4>Players <span class="pcount" id="plCount"></span></h4>
     <div id="teamLegend"></div>
     <div id="playerList" class="empty">Analyze a clip first</div></div>
+
+  <div class="plays reellib" id="reelLib"></div>
 
   <div class="breakdown pcard" id="playerCard">
     <h4><button class="pback" id="plBack">‹</button> <span id="pcName">P—</span> <span class="conf" id="pcConf"></span></h4>
@@ -352,7 +362,7 @@
   integrity="sha384-7qLdgfEQyO9ZQi9ArRHigK+IBto4XPk468jAqc+fnsXaZIcMAhQeLwzggRK7aESl"
   crossorigin="anonymous"></script>
 <script>
-const video=document.getElementById('cam');
+let video=document.getElementById('cam'); // 'let' so the multi-clip reel can src-swap the single element
 const cv=document.getElementById('view');
 const ctx=cv.getContext('2d');
 const det=document.createElement('canvas');
@@ -380,7 +390,8 @@ const S={
   fieldActive:false, fieldFrames:0, fieldHits:0,                 // in-play (green-field) filter telemetry
   clipDur:0, cov:null,                                            // detected clip length + analyzed-coverage diagnostic
   cameraMotion:[], egoUncorrected:0, curGray:null, egoBad:false,  // per-frame cumulative camera offset (ego-motion comp) + telemetry
-  reel:{on:false,segs:[],i:0,playerId:null,intro:0,flash:0,flashV:0,recorder:null,stream:null,blob:null,chunks:null},// #40 highlight reel + video export state
+  lib:{clips:[],activeId:null,cap:4}, multi:false, _libN:0, _lastName:'', _freeze:null, // multi-clip highlight reel library
+  reel:{on:false,segs:[],i:0,playerId:null,intro:0,flash:0,flashV:0,recorder:null,stream:null,blob:null,chunks:null,name:'',wipeUntil:0,ctxId:null,swapping:false},// #40 highlight reel + video export + multi-clip state
   teams:{}, teamLabels:{}, teamsUnclear:true, teamConf:'LOW', teamFilter:'all',
   lastT:0, startT:0, maxV:0, distM:0, smoothV:0, unit:'mph',
   trail:[], showTrail:false, showHeat:false, heat:null, HX:48, HY:0,
@@ -460,7 +471,7 @@ async function boot(){
 }
 
 /* ============================ FILE BOOT ============================ */
-function revokeURL(){if(S.fileURL){try{URL.revokeObjectURL(S.fileURL);}catch(e){}S.fileURL=null;}}
+function revokeURL(){if(S.fileURL){if(!S.lib.clips.some(c=>c.url===S.fileURL)){try{URL.revokeObjectURL(S.fileURL);}catch(e){}}S.fileURL=null;}} // keep URLs promoted into the reel library
 async function bootFile(file){
   const btn=document.getElementById('startBtn'),st=document.getElementById('gateStatus'),er=document.getElementById('gateErr');
   er.textContent='';btn.disabled=true;document.getElementById('loadBtn').style.pointerEvents='none';
@@ -596,7 +607,7 @@ function resetTrajectory(){
   S.trail=[];S.fitSamples=[];S.win=[];S.clampHits=0;S.clampTotal=0;S.trackValid=0;S.trackTotal=0;
   S.tracks=[];S.nextTrackId=1;S.trackArchive=[];S.ball=null;S.ballTrack=[];
   S.selectedPlayer=null;S.players=[];S.playerNames={};S.teams={};S.teamLabels={};S.teamsUnclear=true;S.teamConf='LOW';
-  S.reel={on:false,segs:[],i:0,playerId:null,intro:0,flash:0,flashV:0,recorder:null,stream:null,blob:null,chunks:null,recording:false,wantSave:false};
+  S.reel={on:false,segs:[],i:0,playerId:null,intro:0,flash:0,flashV:0,recorder:null,stream:null,blob:null,chunks:null,recording:false,wantSave:false,name:'',wipeUntil:0,ctxId:null,swapping:false};
   if(S.heat)S.heat.fill(0);
 }
 function hidePlayerUI(){
@@ -983,9 +994,10 @@ function drawPlayers(){
 function findTrackById(id){return S.tracks.find(t=>t.id===id)||S.trackArchive.find(t=>t.id===id)||null;}
 // one place to name/number a player; flows to marker, card, roster, reel lower-third, share
 function namePlayer(id,then){
-  const v=prompt('Who is this? Name or number  (e.g. 40, or "40 Bobby")',S.playerNames[id]||'');
-  if(v!=null){if(v.trim())S.playerNames[id]=v.trim();else delete S.playerNames[id];
-    renderPlayerList();if(S.selectedPlayer===id)renderPlayerCard();if(S.breakdown)buildBreakdown();}
+  const v=prompt('Who is this? Name or number  (e.g. 40, or "40 Bobby")',(S.playerNames&&S.playerNames[id])||S._lastName||'');
+  if(v!=null){if(v.trim()){S.playerNames[id]=v.trim();S._lastName=v.trim();}else delete S.playerNames[id];
+    renderPlayerList();if(S.selectedPlayer===id)renderPlayerCard();if(S.breakdown)buildBreakdown();
+    try{syncActiveClipNames();}catch(e){}} // keep this clip's reel-library segments in sync with the name
   if(then)then(!!(S.playerNames&&S.playerNames[id]));
 }
 function selectPlayer(id,pick){
@@ -1097,7 +1109,101 @@ function buildHighlights(playerId){
   for(const m of merged){m.dur=Math.max(0.1,m.end-m.start);m.peak=ballPeakBetween(m.start,m.end);}
   return merged;
 }
-function showReelBar(){document.getElementById('reelTxt').textContent=nameOf(S.reel.playerId)+' · HIGHLIGHTS '+(S.reel.i+1)+'/'+S.reel.segs.length;document.getElementById('reelBar').classList.add('show');}
+/* ===== multi-clip highlight reel: a session library of analyzed clips, stitched by kid name ===== */
+function segsByNameFromLive(){ // {name:[segs]} from the CURRENT live analysis (names + tracks)
+  const sb={},names=new Set(Object.values(S.playerNames||{}));
+  names.forEach(nm=>{ if(!nm)return;
+    const id=Object.keys(S.playerNames).find(k=>S.playerNames[k]===nm);if(id==null)return;
+    const ids=Object.keys(S.playerNames).filter(k=>S.playerNames[k]===nm).map(Number);
+    let segs=[];try{segs=buildHighlights(+id);}catch(e){}
+    if(segs.length)sb[nm]=segs.map(s=>({start:s.start,end:s.end,dur:s.dur,peak:s.peak,trackIds:ids})); });
+  return sb;
+}
+function storeAnalyzedClip(){ // promote the just-analyzed clip into the library (refs moved, not cloned)
+  if(!S.fileURL)return;
+  const rec={id:'c'+(++S._libN),url:S.fileURL,dur:clipDuration()||S.clipDur||0,vw:video.videoWidth,vh:video.videoHeight,
+    ppm:S.ppm,autoScale:S.autoScale,teams:{...S.teams},teamLabels:{...S.teamLabels},teamsUnclear:S.teamsUnclear,
+    names:{...S.playerNames},breakdown:S.breakdown,trackArchive:S.trackArchive,ballTrack:S.ballTrack,players:S.players,
+    segsByName:segsByNameFromLive()};
+  const ix=S.lib.clips.findIndex(c=>c.url===rec.url);
+  if(ix>=0){rec.id=S.lib.clips[ix].id;S.lib.clips[ix]=rec;}else S.lib.clips.push(rec); // re-analyze ⇒ replace
+  while(S.lib.clips.length>S.lib.cap){const drop=S.lib.clips.shift();if(drop.url!==S.fileURL){try{URL.revokeObjectURL(drop.url);}catch(e){}}}
+  S.multi=S.lib.clips.length>=1;S.lib.activeId=rec.id;renderReelLib();
+}
+function syncActiveClipNames(){ // user named a player AFTER analyze — refresh the active clip's frozen segs
+  if(!S.lib.activeId)return;
+  const c=S.lib.clips.find(x=>x.id===S.lib.activeId);
+  if(!c||c.trackArchive!==S.trackArchive)return; // only while this clip is the live one
+  c.names={...S.playerNames};c.segsByName=segsByNameFromLive();renderReelLib();
+}
+function aggSegments(name){ // one kid's segments across all clips, in clip order
+  const out=[];
+  for(const c of S.lib.clips){const segs=c.segsByName&&c.segsByName[name];if(segs)for(const s of segs)out.push({clipId:c.id,url:c.url,start:s.start,end:s.end,dur:s.dur,peak:s.peak,trackIds:s.trackIds});}
+  return out;
+}
+function reelNames(){const m={};for(const c of S.lib.clips)for(const nm in (c.segsByName||{}))m[nm]=(m[nm]||0)+1;return m;}
+function activateClipContext(clipId){ // point global S at this clip's data so every draw fn renders it
+  const c=S.lib.clips.find(x=>x.id===clipId);if(!c)return;
+  S.trackArchive=c.trackArchive;S.ballTrack=c.ballTrack;S.breakdown=c.breakdown;S.players=c.players;
+  S.ppm=c.ppm;S.autoScale=c.autoScale;S.teams=c.teams;S.teamLabels=c.teamLabels;S.teamsUnclear=c.teamsUnclear;S.playerNames=c.names;
+  const seg=S.reel.segs[S.reel.i];S.selectedPlayer=(seg&&seg.trackIds&&seg.trackIds[0]!=null)?seg.trackIds[0]:null;
+  try{computeCover();}catch(e){} _mkCache={key:'',ms:[]};S.reel.ctxId=clipId;
+}
+function loadClipThen(url,t,cb){ // swap the single <video> to url, seek to t, fire cb when playable
+  let done=false;
+  const finish=()=>{if(done)return;done=true;video.removeEventListener('loadedmetadata',onMeta);video.removeEventListener('canplay',onReady);video.removeEventListener('seeked',onReady);cb();};
+  const onMeta=()=>{try{video.currentTime=Math.max(0,t);}catch(e){}};
+  const onReady=()=>{if(video.readyState>=2)finish();};
+  video.addEventListener('loadedmetadata',onMeta);video.addEventListener('canplay',onReady);video.addEventListener('seeked',onReady);
+  try{video.src=url;video.load();}catch(e){}
+  setTimeout(finish,2500); // safety: never hang on a stalled load
+}
+function freezeCurrentFrame(){
+  const fz=S._freeze||(S._freeze=document.createElement('canvas'));fz.width=CW;fz.height=CH;
+  const fx=fz.getContext('2d');fx.fillStyle='#07090c';fx.fillRect(0,0,CW,CH);
+  if(video.readyState>=2){try{fx.drawImage(video,cover.dx,cover.dy,cover.dw,cover.dh);}catch(e){}}
+}
+function startClipSwap(seg){ // multi-clip cut: hold last frame, swap src, then activate + resume
+  const r=S.reel;freezeCurrentFrame();
+  r.swapping=true;r.wipeUntil=performance.now()+4000; // ceiling; trimmed when ready
+  try{video.pause();}catch(e){}
+  loadClipThen(seg.url,seg.start,()=>{ if(!r.on)return;
+    activateClipContext(seg.clipId); // computeCover inside (clips differ in resolution)
+    r.swapping=false;r.wipeUntil=performance.now()+150;video.play().catch(()=>{});showReelBar(); });
+}
+function buildReelFor(name){
+  const segs=aggSegments(name);
+  if(!segs.length){flash('No saved highlights for <span class="k">'+name+'</span> yet',2400);return;}
+  stopReelRecorder(false);
+  S.reel={on:true,segs,i:0,playerId:null,name,intro:performance.now()+1200,flash:0,flashV:0,
+    recorder:null,stream:null,blob:null,chunks:null,recording:false,wantSave:false,wipeUntil:0,ctxId:null,swapping:false};
+  const sv=document.getElementById('bSaveVid');if(sv)sv.hidden=true;
+  document.getElementById('playerCard').classList.remove('show');document.getElementById('playersPanel').classList.remove('show');document.getElementById('bPlayers').classList.remove('on');
+  showReelBar();
+  const first=segs[0],go=()=>{activateClipContext(first.clipId);reelSeek(first.start);video.play().catch(()=>{});document.getElementById('bPlay').textContent='❚❚';startReelRecorder();};
+  if(S.fileURL===first.url&&video.readyState>=2)go(); // first clip already loaded
+  else{ freezeCurrentFrame();S.reel.swapping=true;S.reel.wipeUntil=performance.now()+4000;
+    loadClipThen(first.url,first.start,()=>{if(!S.reel.on)return;S.reel.swapping=false;S.reel.wipeUntil=performance.now()+150;go();}); }
+}
+function renderReelLib(){
+  const el=document.getElementById('reelLib');if(!el)return;
+  const names=reelNames(),keys=Object.keys(names);
+  if(!S.lib.clips.length){el.classList.remove('show');el.innerHTML='';return;}
+  let mb=0;for(const c of S.lib.clips)mb+=(c.fileSize||0);
+  const head='<h4>Reel Library <span class="pcount">'+S.lib.clips.length+' clip'+(S.lib.clips.length>1?'s':'')+'</span></h4>';
+  const rows=keys.length?keys.map(nm=>'<div class="rlrow" data-name="'+escapeHtml(nm)+'"><span><b>'+escapeHtml(nm)+'</b> · '+names[nm]+' clip'+(names[nm]>1?'s':'')+'</span><span class="rlgo">Build Reel ▶</span></div>').join('')
+    :'<div class="empty">Tap your kid on each clip & name them — their highlights collect here.</div>';
+  el.innerHTML=head+rows+'<button class="rlclear" id="rlClear">Clear library</button>';
+  el.classList.add('show');
+  el.querySelectorAll('.rlrow').forEach(r=>r.onclick=()=>buildReelFor(r.dataset.name));
+  const cl=document.getElementById('rlClear');if(cl)cl.onclick=clearReelLib;
+}
+function clearReelLib(){
+  for(const c of S.lib.clips)if(c.url!==S.fileURL){try{URL.revokeObjectURL(c.url);}catch(e){}}
+  S.lib.clips=[];S.lib.activeId=null;S.multi=false;renderReelLib();flash('Reel library cleared',1400);
+}
+function reelDisplayName(){return S.reel.name||nameOf(S.reel.playerId);}
+function showReelBar(){document.getElementById('reelTxt').textContent=reelDisplayName()+' · HIGHLIGHTS '+(S.reel.i+1)+'/'+S.reel.segs.length;document.getElementById('reelBar').classList.add('show');}
 function hideReelBar(){document.getElementById('reelBar').classList.remove('show');}
 function reelSeek(t){try{video.currentTime=Math.max(0,t);}catch(e){}S.lastT=0;}
 /* ----- save the reel as a real video: record the canvas (video + overlay) ----- */
@@ -1185,14 +1291,17 @@ function endReel(done){
 }
 function advanceReel(){ // driven every frame from loop()
   const r=S.reel;if(!r.on)return;
+  if(r.swapping)return; // mid clip-swap; the load handler will resume
   if(r.intro>0&&performance.now()>=r.intro)r.intro=0; // intro is a CARD timer only — playback already running
   const seg=r.segs[r.i];
   if(!seg){endReel(true);return;}
-  if(video.paused&&r.intro===0)video.play().catch(()=>{}); // resume if a seek paused it (gesture already unlocked playback)
+  if(video.paused&&r.intro===0&&performance.now()>=r.wipeUntil)video.play().catch(()=>{}); // resume if a seek paused it
   if(!video.paused&&video.currentTime>=seg.end-0.02){
     r.i++;
     if(r.i>=r.segs.length){endReel(true);return;}
-    reelSeek(r.segs[r.i].start);showReelBar();
+    const nx=r.segs[r.i];
+    if(nx.clipId&&nx.clipId!==r.ctxId)startClipSwap(nx); // multi-clip cut: swap source with a freeze-wipe
+    else{reelSeek(nx.start);showReelBar();}
   }
 }
 function toggleReel(){if(S.reel.on)endReel(false);else startReel(S.selectedPlayer);}
@@ -1238,7 +1347,7 @@ function drawScorebug(){
 }
 function drawLowerThird(id){
   ctx.save();ctx.textBaseline='middle';ctx.textAlign='left';
-  const nm=nameOf(id).toUpperCase(),hasTeam=!S.teamsUnclear&&teamOf(id)!=='neutral';
+  const nm=reelDisplayName().toUpperCase(),hasTeam=id!=null&&!S.teamsUnclear&&teamOf(id)!=='neutral';
   const col=hasTeam?teamCol(id):'#c8ff32',tag=hasTeam?teamLabelOf(id).toUpperCase():'';
   const y=CH-66*DPR,h=44*DPR,x=14*DPR,pad=12*DPR;
   ctx.font=`800 ${22*DPR}px ${FB}`;const nw=ctx.measureText(nm).width;
@@ -1262,11 +1371,17 @@ function drawLowerThird(id){
 function selectedMarker(){const ms=buildPlayerMarkers();return ms.find(m=>m.id===S.selectedPlayer)||null;}
 function drawBroadcast(){
   const r=S.reel;if(!r.on)return;
+  const teamId=r.name?S.selectedPlayer:r.playerId; // multi-clip: identity is the typed name, team from the active clip's track
   ctx.save();
+  if(performance.now()<r.wipeUntil){ // mid clip-swap: NEXT card over the held frame
+    ctx.fillStyle='rgba(5,7,10,.5)';ctx.fillRect(0,0,CW,CH);
+    ctx.textAlign='center';ctx.fillStyle='#c8ff32';ctx.font=`800 ${22*DPR}px ${FB}`;ctx.fillText('▸ NEXT',CW/2,CH*0.5);
+    drawBug();ctx.restore();return;
+  }
   if(r.intro>0){ // intro card over the held frame
     ctx.fillStyle='rgba(5,7,10,.93)';ctx.fillRect(0,0,CW,CH);
-    const nm=nameOf(r.playerId).toUpperCase(),hasTeam=!S.teamsUnclear&&teamOf(r.playerId)!=='neutral';
-    const team=hasTeam?teamLabelOf(r.playerId).toUpperCase():'';
+    const nm=reelDisplayName().toUpperCase(),hasTeam=teamId!=null&&!S.teamsUnclear&&teamOf(teamId)!=='neutral';
+    const team=hasTeam?teamLabelOf(teamId).toUpperCase():'';
     const top=r.segs.reduce((a,s)=>Math.max(a,s.peak||0),0);
     ctx.textAlign='center';
     ctx.fillStyle='#c8ff32';ctx.font=`800 ${13*DPR}px ${FB}`;ctx.fillText('FACEOFF IQ',CW/2,CH*0.36);
@@ -1282,12 +1397,12 @@ function drawBroadcast(){
   if(m){
     const ph=0.5+0.5*Math.sin(performance.now()/1000*4);
     const fx=m.x,fy=m.y+Math.max(28*DPR,m.h)/2,rw=Math.max(22*DPR,m.w*0.95),rh=rw*0.32;
-    ctx.lineWidth=(2.4+ph*1.8)*DPR;ctx.strokeStyle=ringColOf(r.playerId);ctx.globalAlpha=0.6+0.32*ph;
+    ctx.lineWidth=(2.4+ph*1.8)*DPR;ctx.strokeStyle=ringColOf(teamId);ctx.globalAlpha=0.6+0.32*ph;
     ctx.beginPath();ctx.ellipse(fx,fy,rw,rh,0,0,7);ctx.stroke();
-    ctx.globalAlpha=0.9;ctx.fillStyle=ringColOf(r.playerId);ctx.beginPath();ctx.arc(m.x,m.y,3*DPR,0,7);ctx.fill();
+    ctx.globalAlpha=0.9;ctx.fillStyle=ringColOf(teamId);ctx.beginPath();ctx.arc(m.x,m.y,3*DPR,0,7);ctx.fill();
     ctx.globalAlpha=1;
   }
-  drawOnAir(r.i+1,r.segs.length);drawScorebug();drawLowerThird(r.playerId);drawBug();
+  drawOnAir(r.i+1,r.segs.length);drawScorebug();drawLowerThird(teamId);drawBug();
   ctx.restore();
 }
 /* ===== save / share a result card as an image ===== */
@@ -1537,6 +1652,7 @@ async function analyzePass(){
     if(S.analyzing){
       buildSummary();buildBreakdown();
       try{buildPlayerStats();}catch(e){S.players=[];}
+      try{storeAnalyzedClip();}catch(e){} // add this clip to the multi-clip reel library
       S.selectedPlayer=null;renderPlayerList();
       try{video.currentTime=0;}catch(e){}
       S.cov={dur:d,to:covered,frames}; // diagnostic: detected clip length vs how far we analyzed
@@ -1865,7 +1981,8 @@ function loop(){
   if(!S.running)return;
   try{ // crash-proof: a draw error must never halt rendering (that's a frozen screen)
     advanceReel();
-    if(video.readyState>=2)ctx.drawImage(video,cover.dx,cover.dy,cover.dw,cover.dh);
+    if(S.reel.on&&performance.now()<S.reel.wipeUntil){if(S._freeze)ctx.drawImage(S._freeze,0,0);} // hold last frame during a clip-swap
+    else if(video.readyState>=2)ctx.drawImage(video,cover.dx,cover.dy,cover.dw,cover.dh);
     if(S.reel.on){drawPlayers();drawBroadcast();}
     else{
       if(S.showHeat)drawHeat();
