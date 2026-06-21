@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260621l · reel crash-proof: curation never blocks playback + end-of-clip guard (film still + name/number) -->
+<!-- Z-BUILD: bcast-hl-20260621m · stray tap saves the reel (no silent discard) + recorder-leak + tap-seam fixes (film still + name/number) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -215,7 +215,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-l</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-m</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -1323,7 +1323,7 @@ function reelAudioTrack(){
   }catch(e){return null;}
 }
 function startReelRecorder(){
-  if(S.source!=='file')return;
+  if(S.source!=='file'||S.reel.recording)return; // already recording ⇒ a stale clip-load callback re-entered; don't spawn a 2nd captureStream+recorder
   const cap=canRecordReel();if(!cap.supported)return; // fall back to screen-record tip
   let stream;try{stream=cv.captureStream(30);}catch(e){return;}
   S.reel.hasAudio=false; // add game audio to the recording if we can (UI stays muted)
@@ -2218,7 +2218,7 @@ cv.addEventListener('pointerdown',e=>{
   const nowT=performance.now(),isDbl=_lastTapXY&&nowT-_lastTap<400&&Math.hypot(x-_lastTapXY[0],y-_lastTapXY[1])<60*DPR;
   _lastTap=nowT;_lastTapXY=[x,y];
   if(isDbl){clearTimeout(_tapTimer);markMoment(x,y);return;} // double-tap = ⭐ mark this moment (reel or file)
-  if(S.reel.on){clearTimeout(_tapTimer);_tapTimer=setTimeout(()=>endReel(false),360);return;} // single tap stops the reel (deferred so a 2nd tap can mark)
+  if(S.reel.on){clearTimeout(_tapTimer);_tapTimer=setTimeout(()=>endReel(true),420);return;} // single tap stops the reel AND KEEPS the recording (endReel(true)); 420ms > the 400ms double-tap window so a 2nd tap can still cancel→mark
   if(S.calStage){calTap(x,y);return;}
   // tap a numbered player → select+follow that individual (player mode)
   if(S.mode==='player'){
