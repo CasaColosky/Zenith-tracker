@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260621j · dramatic slow-mo (0.35x, long) + punch-in zoom on the climax (film still + name/number) -->
+<!-- Z-BUILD: bcast-hl-20260621k · LLM broadcast recap (Claude Haiku via Cloudflare Worker) (film still + name/number) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -215,7 +215,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-j</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-k</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -1883,7 +1883,8 @@ function drawSparkline(){
   x.lineWidth=2*DPR;x.strokeStyle='#c8ff32';x.stroke();
 }
 /* ===== play breakdown card + provider-agnostic narrator (free local default) ===== */
-const NARR_DEFAULTS={provider:'local',endpoint:'',model:'gpt-4o-mini',timeoutMs:8000};
+const NARR_DEFAULTS={provider:'worker',endpoint:'https://zenith-narrator.robert-colosky.workers.dev',model:'claude-haiku-4-5-20251001',token:'',timeoutMs:8000};
+// shared token is injected at deploy via window.ZENITH_CFG (kept OUT of source/git); empty here ⇒ falls back to local narration
 function narratorCfg(){
   let cfg={...NARR_DEFAULTS};
   try{const j=localStorage.getItem('zenith_narrator');if(j)cfg={...cfg,...JSON.parse(j)};}catch(e){}
@@ -1896,9 +1897,11 @@ async function narrate(b){
   const cfg=narratorCfg();
   if(cfg.provider==='worker'){
     try{const ctrl=new AbortController(),to=setTimeout(()=>ctrl.abort(),cfg.timeoutMs||8000);
-      const res=await fetch(cfg.endpoint,{method:'POST',headers:{'Content-Type':'application/json'},signal:ctrl.signal,
+      const hdr={'Content-Type':'application/json'};if(cfg.token)hdr['X-Zenith-Token']=cfg.token;
+      const res=await fetch(cfg.endpoint,{method:'POST',headers:hdr,signal:ctrl.signal,
         body:JSON.stringify({events:b.events,meta:b.meta,model:cfg.model})});clearTimeout(to);
-      if(res.ok){const data=await res.json();if(data&&typeof data.text==='string'&&data.text.trim())return data.text.trim();}
+      if(res.ok){const data=await res.json();if(data&&typeof data.text==='string'&&data.text.trim()){
+        let t=data.text.trim();if(t.length>220)t=t.slice(0,217).replace(/\s+\S*$/,'')+'…';return t;}}
     }catch(e){}
   }
   return narrateLocal(b);
