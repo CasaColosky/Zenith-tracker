@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260621h · game audio in exported highlight video (film still + name/number) -->
+<!-- Z-BUILD: bcast-hl-20260621i · auto-editor: build-to-climax + slow-mo + double-tap mark + outro card (film still + name/number) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -123,6 +123,11 @@
   .moments .mo b{color:var(--ink);font-size:11px}
   .moments .mo .zap{color:var(--accent);font-weight:700;font-variant-numeric:tabular-nums}
   .moments .empty{font-size:9px;color:var(--dim);letter-spacing:.12em;text-transform:uppercase;padding:4px 0}
+  .reelopts{display:flex;gap:6px;align-items:center;margin-top:9px;flex-wrap:wrap}
+  .reelopts .ro{font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);
+    border:1px solid rgba(255,255,255,.14);border-radius:3px;padding:5px 9px;cursor:pointer;user-select:none}
+  .reelopts .ro.on{background:var(--accent);color:#08130a;border-color:var(--accent);font-weight:700}
+  .reelopts .rosep{width:1px;height:14px;background:rgba(255,255,255,.16);margin:0 2px}
   #reelBar{position:absolute;top:max(54px,calc(env(safe-area-inset-top) + 44px));left:50%;transform:translateX(-50%);z-index:9;
     display:none;align-items:center;gap:10px;background:rgba(7,9,12,.86);backdrop-filter:blur(6px);
     border:1px solid var(--line);border-radius:30px;padding:7px 8px 7px 14px;font-family:var(--mono)}
@@ -210,7 +215,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-h</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-i</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -275,8 +280,13 @@
     </div>
     <div class="srange"><span class="tdot" id="pcTeamDot" style="background:transparent"></span><span id="pcTeam"></span> · Time on screen <span id="pcTime">0.0</span>s · tap a player on the video or roster</div>
     <div id="pcMoments" class="moments"></div>
+    <div class="reelopts" id="reelOpts">
+      <span class="ro" data-k="style" data-v="hype">Hype</span><span class="ro" data-k="style" data-v="clean">Clean</span>
+      <span class="rosep"></span>
+      <span class="ro" data-k="len" data-v="30">30s</span><span class="ro" data-k="len" data-v="60">60s</span>
+    </div>
     <div class="pcbtns">
-      <button class="shbtn alt" id="bReel">▶ Highlights</button>
+      <button class="shbtn alt" id="bReel">▶ Make Reel</button>
       <button class="shbtn" id="bSharePlayer">Share ⤴</button>
     </div>
     <button class="shbtn" id="bSaveVid" hidden style="margin-top:8px">⤓ Save highlight video</button>
@@ -391,6 +401,7 @@ const S={
   clipDur:0, cov:null,                                            // detected clip length + analyzed-coverage diagnostic
   cameraMotion:[], egoUncorrected:0, curGray:null, egoBad:false,  // per-frame cumulative camera offset (ego-motion comp) + telemetry
   lib:{clips:[],activeId:null,cap:4}, multi:false, _libN:0, _lastName:'', _freeze:null, // multi-clip highlight reel library
+  reelStyle:'hype', reelTarget:30, _markFlash:null,                // auto-editor: style preset + target length
   reel:{on:false,segs:[],i:0,playerId:null,intro:0,flash:0,flashV:0,recorder:null,stream:null,blob:null,chunks:null,name:'',wipeUntil:0,ctxId:null,swapping:false},// #40 highlight reel + video export + multi-clip state
   teams:{}, teamLabels:{}, teamsUnclear:true, teamConf:'LOW', teamFilter:'all',
   lastT:0, startT:0, maxV:0, distM:0, smoothV:0, unit:'mph',
@@ -430,6 +441,18 @@ const now=()=>S.source==='file'?video.currentTime*1000:performance.now();
 
 function loadPlays(){try{const j=localStorage.getItem('zenith_plays');if(j)S.plays=JSON.parse(j);}catch(e){}}
 function savePlays(){try{localStorage.setItem('zenith_plays',JSON.stringify(S.plays.slice(0,30)));}catch(e){}}
+// ===== parent-marked moments (double-tap) — the one reliable human signal; guaranteed into the reel =====
+function curClipId(){return (S.reel.on?(S.reel.ctxId||S.lib.activeId):S.lib.activeId)||'cur';}
+function loadMoments(cid){try{const j=localStorage.getItem('zenith_moments_'+cid);return j?JSON.parse(j):[];}catch(e){return [];}}
+function saveMoments(cid,arr){try{localStorage.setItem('zenith_moments_'+cid,JSON.stringify(arr));}catch(e){}}
+function markMoment(x,y){
+  if(S.source!=='file')return;
+  const cid=curClipId(),t=+video.currentTime.toFixed(2),arr=loadMoments(cid);
+  const ix=arr.findIndex(m=>Math.abs(m-t)<0.6);
+  if(ix>=0){arr.splice(ix,1);saveMoments(cid,arr);flash('Moment unmarked',1200);}
+  else{arr.push(t);saveMoments(cid,arr);flash('⭐ Marked — it’ll make the reel',1700);}
+  S._markFlash={x,y,t:performance.now()};
+}
 
 function resize(){
   if(S.analyzing)return; // don't reallocate canvases/buffers mid-analysis pass
@@ -960,7 +983,7 @@ function buildPlayerMarkers(){
   let out;
   if(S.analyzing){out=[];for(const tr of S.tracks)out.push({id:tr.id,x:tr.x,y:tr.y,w:tr.w,h:tr.h,confirmed:!!tr.confirmed});}
   else if(S.trackArchive.length){
-    const t=video.currentTime,key=t.toFixed(3)+'|'+S.trackArchive.length;
+    const t=video.currentTime,key=t.toFixed((video.playbackRate||1)<1?2:3)+'|'+S.trackArchive.length; // coarser key during slow-mo so the marker path isn't re-sampled every frame
     if(_mkCache.key===key)out=_mkCache.ms;                 // paused frame → reuse (no per-rAF re-crunch)
     else{out=[];const GAP=0.34;
       for(const tr of S.trackArchive){if(!tr.confirmed)continue;const pos=sampleAt(tr,t,GAP);if(!pos)continue;const b=nearestBox(tr,t);out.push({id:tr.id,x:pos.x,y:pos.y,w:b.w,h:b.h,confirmed:true});}
@@ -1059,13 +1082,22 @@ function renderMoments(id){
   const rb=document.getElementById('bReel');
   const segs=buildHighlights(id);S._moCache=segs;
   const named=!!(S.playerNames&&S.playerNames[id]);
-  if(!segs.length){el.innerHTML='<div class="empty">No touches detected — try a longer clip</div>';if(rb){rb.disabled=true;rb.textContent='▶ Highlights';}return;}
-  if(rb){rb.disabled=false;rb.textContent='▶ '+(named?nameOf(id)+'’s reel':'Highlights')+' ('+segs.length+')';}
+  renderReelOpts();
+  if(!segs.length){el.innerHTML='<div class="empty">No touches detected — try a longer clip</div>';if(rb){rb.disabled=true;rb.textContent='▶ Make Reel';}return;}
+  if(rb){rb.disabled=false;rb.textContent='▶ Make '+(named?nameOf(id)+'’s':'')+' Reel';}
   el.innerHTML=segs.map((s,i)=>{
     const zap=(s.peak>0&&S.ppm)?' <span class="zap">⚡'+conv(s.peak).toFixed(0)+'</span>':'';
     return '<div class="mo" data-i="'+i+'"><span><b>Touch '+(i+1)+'</b> · '+fmt(s.start)+'</span><span>'+s.dur.toFixed(1)+'s'+zap+'</span></div>';
   }).join('');
   el.querySelectorAll('.mo').forEach(r=>r.onclick=()=>{const seg=(S._moCache||[])[+r.dataset.i];if(seg)playMoment(seg);});
+}
+function renderReelOpts(){
+  const el=document.getElementById('reelOpts');if(!el)return;
+  el.querySelectorAll('.ro').forEach(c=>{
+    const on=(c.dataset.k==='style'&&c.dataset.v===S.reelStyle)||(c.dataset.k==='len'&&+c.dataset.v===S.reelTarget);
+    c.classList.toggle('on',on);
+    c.onclick=()=>{if(c.dataset.k==='style')S.reelStyle=c.dataset.v;else S.reelTarget=+c.dataset.v;renderReelOpts();};
+  });
 }
 /* ===== #40 highlight reel + ESPN-style broadcast overlay (in-app; screen-record to save) ===== */
 const FB='ui-monospace,Menlo,monospace';
@@ -1090,6 +1122,21 @@ function ballPeakBetween(t0,t1){ // robust peak ball speed (m/s) over [t0,t1]
   }
   return robustPeak(fit);
 }
+// like ballPeakBetween but also returns the TIMESTAMP of the peak (the ball-strike) — slow-mo aims here
+function ballPeakWithTime(t0,t1){
+  if(!S.ppm||!S.ballTrack.length)return {peak:0,tPeak:(t0+t1)/2};
+  const win=[],fit=[];
+  for(const b of S.ballTrack){
+    if(b.t<t0-WIN_T_MAX)continue;if(b.t>t1)break;
+    win.push({t:b.t,x:b.x,y:b.y});
+    while(win.length&&b.t-win[0].t>WIN_T_MAX)win.shift();
+    if(win.length>WIN_N)win.shift();
+    if(win.length>=3){const fv=fitVelocity(win,true);if(fv){const v=Math.hypot(fv.vx,fv.vy)/S.ppm;if(v<=CEIL.ball)fit.push({v,t:b.t});}}
+  }
+  if(!fit.length)return {peak:0,tPeak:(t0+t1)/2};
+  let best=fit[0];for(const f of fit)if(f.v>best.v)best=f;
+  return {peak:robustPeak(fit.map(f=>f.v)),tPeak:best.t};
+}
 // padded + merged possession segments for a player. Name-based recall: if id-swap split the
 // player across fragments the user labelled the same (e.g. two "40"s), all are included.
 function buildHighlights(playerId){
@@ -1106,8 +1153,49 @@ function buildHighlights(playerId){
   const merged=[];
   for(const s of segs){const m=merged[merged.length-1];
     if(m&&s.start-m.end<=MERGE)m.end=Math.max(m.end,s.end);else merged.push({start:s.start,end:s.end});}
-  for(const m of merged){m.dur=Math.max(0.1,m.end-m.start);m.peak=ballPeakBetween(m.start,m.end);}
+  for(const m of merged){m.dur=Math.max(0.1,m.end-m.start);const pk=ballPeakWithTime(m.start,m.end);m.peak=pk.peak;m.tPeak=pk.tPeak;}
   return merged;
+}
+/* ===== the AUTO-EDITOR: curate raw segments into a build-to-climax edit ===== */
+const REEL_STYLE={hype:{order:'climax',slowmo:true,minSeg:1.2},clean:{order:'chrono',slowmo:false,minSeg:1.6}};
+// Take raw {start,end,dur,peak,tPeak} segments → a curated, paced, climax-ordered selection (SAME shape,
+// so the player loop is untouched). Parent-tapped moments are a HARD FLOOR (always in, never deduped).
+function curateReel(rawSegs,opts){
+  opts=opts||{};const targetSec=opts.targetSec||30,order=opts.order||'climax',minSeg=opts.minSeg||1.2,slowmo=opts.slowmo!==false;
+  const marks=opts.marks||[];
+  if(!rawSegs||!rawSegs.length)return rawSegs||[];
+  const isMarked=s=>marks.some(m=>m>=s.start-0.6&&m<=s.end+0.6);
+  let segs=rawSegs.map(s=>{const mk=isMarked(s),sc=mk?999:(0.45*Math.min((s.dur||1)/8,1)+0.45*Math.min((s.peak||0)/SHOT_MS,1)+0.10);
+    return {...s,_sc:sc,_mk:mk};});
+  for(const s of segs){if(s.dur<minSeg){s.end=s.start+minSeg;s.dur=s.end-s.start;}} // ~min footage: no sub-1s stutter
+  // dedupe heavily-overlapping segs (keep the higher score); never drop a marked one
+  segs.sort((a,b)=>a.start-b.start);
+  const dd=[];
+  for(const s of segs){const last=dd[dd.length-1];
+    if(last&&!s._mk&&!last._mk&&(last.clipId===s.clipId)){
+      const ov=Math.min(last.end,s.end)-Math.max(last.start,s.start),u=Math.max(last.end,s.end)-Math.min(last.start,s.start);
+      if(ov>0&&u>0&&ov/u>0.7){if(s._sc>last._sc){Object.assign(last,s);}continue;}}
+    dd.push(s);}
+  // select to target length — marks always included, then highest-score until full
+  let sel=dd;const tot=dd.reduce((a,s)=>a+s.dur,0);
+  if(tot>targetSec){
+    const must=dd.filter(s=>s._mk),rest=dd.filter(s=>!s._mk).sort((a,b)=>b._sc-a._sc);
+    let acc=must.reduce((a,s)=>a+s.dur,0);sel=must.slice();
+    for(const s of rest){if(acc>=targetSec)break;sel.push(s);acc+=s.dur;}
+  }
+  // order: build-to-climax (chronological, but the single best peak LAST) or chronological
+  sel.sort((a,b)=>(a.clipId===b.clipId?a.start-b.start:0));
+  sel.sort((a,b)=>a.start-b.start);
+  if(order==='climax'&&sel.length>1){
+    let bi=0;for(let i=1;i<sel.length;i++)if((sel[i].peak||0)>(sel[bi].peak||0))bi=i;
+    const climax=sel.splice(bi,1)[0];climax._climax=true;sel.push(climax);
+  }
+  // slow-mo sub-window on the climax (around the ball-strike tPeak), strictly inside the clip
+  if(slowmo){const c=sel[sel.length-1];if(c&&c._climax){
+    const lo=c.start+0.3,hi=c.end-0.5,tp=Math.max(lo,Math.min(hi,(c.tPeak!=null?c.tPeak:(c.start+c.end)/2)));
+    const a=Math.max(lo,tp-0.5),b=Math.min(hi,tp+0.7);
+    if(b>a){c._smStart=a;c._smEnd=b;}}}
+  return sel;
 }
 /* ===== multi-clip highlight reel: a session library of analyzed clips, stitched by kid name ===== */
 function segsByNameFromLive(){ // {name:[segs]} from the CURRENT live analysis (names + tracks)
@@ -1165,6 +1253,7 @@ function freezeCurrentFrame(){
 }
 function startClipSwap(seg){ // multi-clip cut: hold last frame, swap src, then activate + resume
   const r=S.reel;freezeCurrentFrame();
+  try{video.playbackRate=1;}catch(e){} // never carry slow-mo across a clip cut
   r.swapping=true;r.wipeUntil=performance.now()+4000; // ceiling; trimmed when ready
   try{video.pause();}catch(e){}
   loadClipThen(seg.url,seg.start,()=>{ if(!r.on)return;
@@ -1172,7 +1261,8 @@ function startClipSwap(seg){ // multi-clip cut: hold last frame, swap src, then 
     r.swapping=false;r.wipeUntil=performance.now()+150;video.play().catch(()=>{});showReelBar(); });
 }
 function buildReelFor(name){
-  const segs=aggSegments(name);
+  const style=REEL_STYLE[S.reelStyle]||REEL_STYLE.hype;
+  const segs=curateReel(aggSegments(name),{targetSec:S.reelTarget,order:style.order,minSeg:style.minSeg,slowmo:style.slowmo,marks:[]});
   if(!segs.length){flash('No saved highlights for <span class="k">'+name+'</span> yet',2400);return;}
   stopReelRecorder(false);
   S.reel={on:true,segs,i:0,playerId:null,name,intro:performance.now()+1200,flash:0,flashV:0,
@@ -1271,7 +1361,8 @@ function exportReelBlob(){
 function startReel(playerId){
   if(playerId==null){flash('Tap your player on the video first',1800);return;}
   if(!S.trackArchive.length){flash('Analyze the clip first',1600);return;}
-  const segs=buildHighlights(playerId);
+  const style=REEL_STYLE[S.reelStyle]||REEL_STYLE.hype;
+  const segs=curateReel(buildHighlights(playerId),{targetSec:S.reelTarget,order:style.order,minSeg:style.minSeg,slowmo:style.slowmo,marks:loadMoments(curClipId())});
   if(!segs.length){flash('No touches for <span class="k">'+nameOf(playerId)+'</span> yet — film the play & Analyze again',2800);return;}
   stopReelRecorder(false); // tear down any prior recorder before we reassign S.reel
   S.selectedPlayer=playerId;
@@ -1295,7 +1386,8 @@ function playMoment(seg){ // play a single touch (no intro card — snappier; NO
 }
 function endReel(done){
   if(!S.reel.on)return;
-  const pid=S.reel.playerId,wasRec=S.reel.recording;S.reel.on=false;S.reel.segs=[];S.reel.intro=0;
+  const pid=S.reel.playerId,wasRec=S.reel.recording;S.reel.on=false;S.reel.segs=[];S.reel.intro=0;S.reel.closing=false;
+  try{video.playbackRate=1;}catch(e){} // never leave the element in slow-mo
   stopReelRecorder(done); // async: onstop reveals ⤓ Save or falls back to the screen-record tip
   try{video.pause();}catch(e){}document.getElementById('bPlay').textContent='▶';
   hideReelBar();
@@ -1305,16 +1397,25 @@ function endReel(done){
   }
   if(S.selectedPlayer!=null)renderPlayerCard();
 }
+function updateSlowMo(seg){ // ramp to 0.5x inside the climax's slow-mo window, 1x otherwise
+  const want=(seg&&seg._smStart!=null&&video.currentTime>=seg._smStart&&video.currentTime<=seg._smEnd)?0.5:1;
+  try{if(Math.abs((video.playbackRate||1)-want)>0.01)video.playbackRate=want;}catch(e){}
+}
 function advanceReel(){ // driven every frame from loop()
   const r=S.reel;if(!r.on)return;
+  if(r.closing){if(performance.now()>=r.closingUntil)endReel(true);return;} // hold the BY THE NUMBERS card while recording
   if(r.swapping)return; // mid clip-swap; the load handler will resume
   if(r.intro>0&&performance.now()>=r.intro)r.intro=0; // intro is a CARD timer only — playback already running
   const seg=r.segs[r.i];
   if(!seg){endReel(true);return;}
   if(video.paused&&r.intro===0&&performance.now()>=r.wipeUntil)video.play().catch(()=>{}); // resume if a seek paused it
+  updateSlowMo(seg);
   if(!video.paused&&video.currentTime>=seg.end-0.02){
-    r.i++;
-    if(r.i>=r.segs.length){endReel(true);return;}
+    if(r.i+1>=r.segs.length){ // last segment done → enter the closing (outro) phase, recorder stays live
+      try{video.pause();video.playbackRate=1;}catch(e){}
+      r.closing=true;r.closingUntil=performance.now()+2600;return;
+    }
+    r.i++;try{video.playbackRate=1;}catch(e){}
     const nx=r.segs[r.i];
     if(nx.clipId&&nx.clipId!==r.ctxId)startClipSwap(nx); // multi-clip cut: swap source with a freeze-wipe
     else{reelSeek(nx.start);showReelBar();}
@@ -1322,9 +1423,9 @@ function advanceReel(){ // driven every frame from loop()
 }
 function toggleReel(){if(S.reel.on)endReel(false);else startReel(S.selectedPlayer);}
 function stopReelQuiet(){ // teardown paths: kill the reel without flashing or re-rendering the card
-  if(!S.reel.on){stopReelRecorder(false);return;}S.reel.on=false;S.reel.segs=[];S.reel.intro=0;
+  if(!S.reel.on){stopReelRecorder(false);return;}S.reel.on=false;S.reel.segs=[];S.reel.intro=0;S.reel.closing=false;
   stopReelRecorder(false); // mode-switch/new-clip/reset must not leak a running recorder + live tracks
-  try{video.pause();}catch(e){}hideReelBar();const b=document.getElementById('bPlay');if(b)b.textContent='▶';}
+  try{video.pause();video.playbackRate=1;}catch(e){}hideReelBar();const b=document.getElementById('bPlay');if(b)b.textContent='▶';}
 /* ----- broadcast canvas overlay ----- */
 function roundRect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
 function ringColOf(id){return (!S.teamsUnclear&&teamOf(id)!=='neutral')?teamCol(id):'#c8ff32';}
@@ -1385,10 +1486,35 @@ function drawLowerThird(id){
   ctx.restore();
 }
 function selectedMarker(){const ms=buildPlayerMarkers();return ms.find(m=>m.id===S.selectedPlayer)||null;}
+function drawByTheNumbers(){ // closing card — honest stats only, '(est)' when scale isn't set
+  const r=S.reel;ctx.fillStyle='rgba(5,7,10,.95)';ctx.fillRect(0,0,CW,CH);
+  ctx.textAlign='center';
+  const nm=reelDisplayName().toUpperCase();
+  ctx.fillStyle='#c8ff32';ctx.font=`800 ${13*DPR}px ${FB}`;ctx.fillText('BY THE NUMBERS',CW/2,CH*0.21);
+  let fs=44*DPR;ctx.font=`900 ${fs}px ${FB}`;while(fs>22*DPR&&ctx.measureText(nm).width>CW*0.86){fs-=2*DPR;ctx.font=`900 ${fs}px ${FB}`;}
+  ctx.fillStyle='#fff';ctx.fillText(nm,CW/2,CH*0.31);
+  const p=(S.players||[]).find(q=>q.id===S.selectedPlayer),topSeg=r.segs.reduce((a,s)=>Math.max(a,s.peak||0),0);
+  const est=(S.autoScale||!S.ppm)?' EST':'';
+  const rows=[
+    ['TOP SPEED',(p&&S.ppm)?conv(p.topMs).toFixed(1)+' '+S.unit.toUpperCase()+est:(topSeg&&S.ppm?conv(topSeg).toFixed(0)+' '+S.unit.toUpperCase()+est:'—')],
+    ['PLAYS',String(r.segs.length)],
+    ['TOUCHES',p?String(p.touches):'—'],
+    ['POSSESSION',p?p.possSec.toFixed(1)+'s':'—']];
+  let yy=CH*0.43;
+  for(const [k,v] of rows){
+    ctx.textAlign='left';ctx.fillStyle='#6b7780';ctx.font=`600 ${15*DPR}px ${FB}`;ctx.fillText(k,CW*0.18,yy);
+    ctx.textAlign='right';ctx.fillStyle='#e8f0f2';ctx.font=`800 ${21*DPR}px ${FB}`;ctx.fillText(v,CW*0.82,yy);
+    yy+=CH*0.078;}
+  const conf=(p&&p.conf)||(S.summary&&S.summary.quality&&S.summary.quality.label)||'';
+  if(conf){ctx.textAlign='center';const col=conf==='HIGH'?'#c8ff32':conf==='MED'?'#19e0ff':'#ff5d4a';
+    ctx.fillStyle=col;ctx.font=`700 ${12*DPR}px ${FB}`;ctx.fillText(conf+' CONFIDENCE',CW/2,yy+CH*0.01);}
+  drawBug();
+}
 function drawBroadcast(){
   const r=S.reel;if(!r.on)return;
   const teamId=r.name?S.selectedPlayer:r.playerId; // multi-clip: identity is the typed name, team from the active clip's track
   ctx.save();
+  if(r.closing){drawByTheNumbers();ctx.restore();return;} // closing outro card (drawn while recording stays live)
   if(performance.now()<r.wipeUntil){ // mid clip-swap: NEXT card over the held frame
     ctx.fillStyle='rgba(5,7,10,.5)';ctx.fillRect(0,0,CW,CH);
     ctx.textAlign='center';ctx.fillStyle='#c8ff32';ctx.font=`800 ${22*DPR}px ${FB}`;ctx.fillText('▸ NEXT',CW/2,CH*0.5);
@@ -1417,6 +1543,12 @@ function drawBroadcast(){
     ctx.beginPath();ctx.ellipse(fx,fy,rw,rh,0,0,7);ctx.stroke();
     ctx.globalAlpha=0.9;ctx.fillStyle=ringColOf(teamId);ctx.beginPath();ctx.arc(m.x,m.y,3*DPR,0,7);ctx.fill();
     ctx.globalAlpha=1;
+  }
+  if((video.playbackRate||1)<1){ // SLO-MO tag on the climax
+    ctx.textAlign='center';ctx.textBaseline='middle';ctx.font=`800 ${16*DPR}px ${FB}`;
+    const tg='◗ SLO-MO',tw=ctx.measureText(tg).width,pad=12*DPR,bw=tw+pad*2,by=CH*0.10;
+    ctx.fillStyle='rgba(200,255,50,.92)';roundRect((CW-bw)/2,by,bw,30*DPR,15*DPR);ctx.fill();
+    ctx.fillStyle='#08130a';ctx.fillText(tg,CW/2,by+15*DPR);
   }
   drawOnAir(r.i+1,r.segs.length);drawScorebug();drawLowerThird(teamId);drawBug();
   ctx.restore();
@@ -2063,10 +2195,14 @@ function drawCal(){
 }
 
 /* ============================ POINTER / CONTROLS ============================ */
+let _lastTap=0,_lastTapXY=null,_tapTimer=null;
 cv.addEventListener('pointerdown',e=>{
   if(!S.running)return;
-  if(S.reel.on){endReel(false);return;} // a tap during the reel stops it
   const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)*DPR,y=(e.clientY-r.top)*DPR;
+  const nowT=performance.now(),isDbl=_lastTapXY&&nowT-_lastTap<400&&Math.hypot(x-_lastTapXY[0],y-_lastTapXY[1])<60*DPR;
+  _lastTap=nowT;_lastTapXY=[x,y];
+  if(isDbl){clearTimeout(_tapTimer);markMoment(x,y);return;} // double-tap = ⭐ mark this moment (reel or file)
+  if(S.reel.on){clearTimeout(_tapTimer);_tapTimer=setTimeout(()=>endReel(false),360);return;} // single tap stops the reel (deferred so a 2nd tap can mark)
   if(S.calStage){calTap(x,y);return;}
   // tap a numbered player → select+follow that individual (player mode)
   if(S.mode==='player'){
