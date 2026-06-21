@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260621k · LLM broadcast recap (Claude Haiku via Cloudflare Worker) (film still + name/number) -->
+<!-- Z-BUILD: bcast-hl-20260621l · reel crash-proof: curation never blocks playback + end-of-clip guard (film still + name/number) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -215,7 +215,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-k</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-l</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -1261,9 +1261,12 @@ function startClipSwap(seg){ // multi-clip cut: hold last frame, swap src, then 
     r.swapping=false;r.wipeUntil=performance.now()+150;video.play().catch(()=>{});showReelBar(); });
 }
 function buildReelFor(name){
-  const style=REEL_STYLE[S.reelStyle]||REEL_STYLE.hype;
-  const segs=curateReel(aggSegments(name),{targetSec:S.reelTarget,order:style.order,minSeg:style.minSeg,slowmo:style.slowmo,marks:[]});
-  if(!segs.length){flash('No saved highlights for <span class="k">'+name+'</span> yet',2400);return;}
+  let raw=[];try{raw=aggSegments(name)||[];}catch(e){raw=[];}
+  if(!raw.length){flash('No saved highlights for <span class="k">'+name+'</span> yet',2400);return;}
+  let segs=raw;
+  try{const style=REEL_STYLE[S.reelStyle]||REEL_STYLE.hype;
+    const c=curateReel(raw,{targetSec:S.reelTarget,order:style.order,minSeg:style.minSeg,slowmo:style.slowmo,marks:[]});
+    if(c&&c.length)segs=c;}catch(e){segs=raw;}
   stopReelRecorder(false);
   S.reel={on:true,segs,i:0,playerId:null,name,intro:performance.now()+1200,flash:0,flashV:0,
     recorder:null,stream:null,blob:null,chunks:null,recording:false,wantSave:false,wipeUntil:0,ctxId:null,swapping:false};
@@ -1361,9 +1364,12 @@ function exportReelBlob(){
 function startReel(playerId){
   if(playerId==null){flash('Tap your player on the video first',1800);return;}
   if(!S.trackArchive.length){flash('Analyze the clip first',1600);return;}
-  const style=REEL_STYLE[S.reelStyle]||REEL_STYLE.hype;
-  const segs=curateReel(buildHighlights(playerId),{targetSec:S.reelTarget,order:style.order,minSeg:style.minSeg,slowmo:style.slowmo,marks:loadMoments(curClipId())});
-  if(!segs.length){flash('No touches for <span class="k">'+nameOf(playerId)+'</span> yet — film the play & Analyze again',2800);return;}
+  let raw=[];try{raw=buildHighlights(playerId)||[];}catch(e){raw=[];}
+  if(!raw.length){flash('No touches for <span class="k">'+nameOf(playerId)+'</span> yet — film the play & Analyze again',2800);return;}
+  let segs=raw; // CURATION MUST NEVER BLOCK THE REEL — on any failure, play the raw reel (the always-working path)
+  try{const style=REEL_STYLE[S.reelStyle]||REEL_STYLE.hype;
+    const c=curateReel(raw,{targetSec:S.reelTarget,order:style.order,minSeg:style.minSeg,slowmo:style.slowmo,marks:loadMoments(curClipId())});
+    if(c&&c.length)segs=c;}catch(e){segs=raw;}
   stopReelRecorder(false); // tear down any prior recorder before we reassign S.reel
   S.selectedPlayer=playerId;
   S.reel={on:true,segs,i:0,playerId,intro:performance.now()+1200,flash:0,flashV:0,recorder:null,stream:null,blob:null,chunks:null,recording:false,wantSave:false};
@@ -1408,9 +1414,10 @@ function advanceReel(){ // driven every frame from loop()
   if(r.intro>0&&performance.now()>=r.intro)r.intro=0; // intro is a CARD timer only — playback already running
   const seg=r.segs[r.i];
   if(!seg){endReel(true);return;}
-  if(video.paused&&r.intro===0&&performance.now()>=r.wipeUntil)video.play().catch(()=>{}); // resume if a seek paused it
+  const atEnd=video.ended||(isFinite(video.duration)&&video.duration>0&&video.currentTime>=video.duration-0.05); // clip ran out (seg.end may exceed duration)
+  if(video.paused&&!atEnd&&r.intro===0&&performance.now()>=r.wipeUntil)video.play().catch(()=>{}); // resume if a seek paused it
   updateSlowMo(seg);
-  if(!video.paused&&video.currentTime>=seg.end-0.02){
+  if((!video.paused&&video.currentTime>=seg.end-0.02)||atEnd){
     if(r.i+1>=r.segs.length){ // last segment done → enter the closing (outro) phase, recorder stays live
       try{video.pause();video.playbackRate=1;}catch(e){}
       r.closing=true;r.closingUntil=performance.now()+2600;return;
