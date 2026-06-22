@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260621r · foolproof analyze flow: prominent pulsing Analyze button + clean result summary (film still + name/number) -->
+<!-- Z-BUILD: bcast-hl-20260622s · Make Reel always (re)starts + stale-reel reset + never-silent errors (film still + name/number) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -218,7 +218,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-r</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-s</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -1393,6 +1393,7 @@ function speakReel(){
 }
 function stopReelVoice(){try{if('speechSynthesis' in window)speechSynthesis.cancel();}catch(e){}}
 function startReel(playerId){
+  if(S.reel.on){try{stopReelQuiet();}catch(e){}} // never let a stale/leftover reel block a fresh one
   if(playerId==null){flash('Tap your player on the video first',1800);return;}
   if(!S.trackArchive.length){flash('Analyze the clip first',1600);return;}
   let raw=[];try{raw=buildHighlights(playerId)||[];}catch(e){raw=[];}
@@ -1401,19 +1402,21 @@ function startReel(playerId){
   try{const style=REEL_STYLE[S.reelStyle]||REEL_STYLE.hype;
     const c=curateReel(raw,{targetSec:S.reelTarget,order:style.order,minSeg:style.minSeg,slowmo:style.slowmo,marks:loadMoments(curClipId())});
     if(c&&c.length)segs=c;}catch(e){segs=raw;}
-  stopReelRecorder(false); // tear down any prior recorder before we reassign S.reel
-  S.selectedPlayer=playerId;
-  S.reel={on:true,segs,i:0,playerId,intro:performance.now()+1200,flash:0,flashV:0,recorder:null,stream:null,blob:null,chunks:null,recording:false,wantSave:false};
-  const sv=document.getElementById('bSaveVid');if(sv)sv.hidden=true; // clear a stale Save button
-  document.getElementById('playerCard').classList.remove('show');
-  document.getElementById('playersPanel').classList.remove('show');
-  document.getElementById('bPlayers').classList.remove('on');
-  showReelBar();
-  reelSeek(segs[0].start);
-  // play INSIDE the user gesture (iOS blocks deferred autoplay); the intro card just overlays
-  video.play().catch(()=>{});document.getElementById('bPlay').textContent='❚❚';
-  startReelRecorder(); // record the canvas (video + overlay) to a real file, if the browser supports it
-  speakReel(); // AI commentary voice — inside the tap gesture so iOS allows speechSynthesis
+  try{
+    stopReelRecorder(false); // tear down any prior recorder before we reassign S.reel
+    S.selectedPlayer=playerId;
+    S.reel={on:true,segs,i:0,playerId,intro:performance.now()+1200,flash:0,flashV:0,recorder:null,stream:null,blob:null,chunks:null,recording:false,wantSave:false,name:'',wipeUntil:0,ctxId:null,swapping:false,closing:false};
+    const sv=document.getElementById('bSaveVid');if(sv)sv.hidden=true; // clear a stale Save button
+    document.getElementById('playerCard').classList.remove('show');
+    document.getElementById('playersPanel').classList.remove('show');
+    document.getElementById('bPlayers').classList.remove('on');
+    showReelBar();
+    reelSeek(segs[0].start);
+    // play INSIDE the user gesture (iOS blocks deferred autoplay); the intro card just overlays
+    video.play().catch(()=>{});document.getElementById('bPlay').textContent='❚❚';
+    startReelRecorder(); // record the canvas (video + overlay) to a real file, if the browser supports it
+    speakReel(); // AI commentary voice — inside the tap gesture so iOS allows speechSynthesis
+  }catch(e){try{stopReelQuiet();}catch(_){}flash('Reel hiccup — tap <span class="k">Make Reel</span> again',2600);} // never silent
 }
 function playMoment(seg){ // play a single touch (no intro card — snappier; NOT recorded in v1)
   if(!seg)return;
@@ -2387,7 +2390,7 @@ document.getElementById('plBack').onclick=clearPlayerSelection;
 document.getElementById('bSharePlay').onclick=()=>shareCard('play');
 document.getElementById('bSharePlayer').onclick=()=>shareCard('player');
 document.getElementById('bSaveVid').onclick=exportReelBlob;
-document.getElementById('bReel').onclick=toggleReel;
+document.getElementById('bReel').onclick=()=>startReel(S.selectedPlayer); // Make Reel = always (re)start; stop is the reel-bar ■ or a tap
 document.getElementById('reelStop').onclick=()=>endReel(false);
 document.getElementById('bUnit').onclick=function(){
   S.unit=S.unit==='kmh'?'mph':S.unit==='mph'?'ms':'kmh';
