@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260621p · fix: only window clips over 3 min (normal clips analyze fully again) (film still + name/number) -->
+<!-- Z-BUILD: bcast-hl-20260621q · on-screen analyze diagnostic (players seen / tracks / ball) (film still + name/number) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -215,7 +215,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-p</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-q</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -1855,7 +1855,8 @@ async function analyzePass(){
         :S.summary.scaleLikelyWrong?'speeds exceed a real shot — <span class="k">re-tap Set Scale</span> wide.'
         :!S.summary.calibrated?'<span class="k">no scale set</span> — tap Set Scale for real mph.'
         :'peak <span class="k">'+conv(S.summary.peakMs).toFixed(1)+'</span> '+unitLabel();
-      flash(covLine+(S.egoBad?' · <span class="k">camera motion not corrected</span>':'')+'\n'+tail+'\n👆 <span class="k">Tap your kid on the video</span> → name → ▶ reel',5200);
+      const dbg='🔎 <span class="k">seen '+(S.maxPersons||0)+' ppl · '+((S.trackArchive&&S.trackArchive.length)||0)+' tracks · '+((S.players&&S.players.length)||0)+' players · ball '+((S.ballTrack&&S.ballTrack.length)||0)+'f</span>';
+      flash(dbg+'\n'+covLine+(S.egoBad?' · camera motion not corrected':'')+'\n'+tail+'\n👆 <span class="k">Tap your kid on the video</span> → name → ▶ reel',7000);
     }
   }catch(e){
     flash('Analysis hit a snag — try a shorter clip.',2600);
