@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260621o · AI commentary VOICE over the reel (Web Speech, reads the real stats) (film still + name/number) -->
+<!-- Z-BUILD: bcast-hl-20260621p · fix: only window clips over 3 min (normal clips analyze fully again) (film still + name/number) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -215,7 +215,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-o</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-p</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -1785,13 +1785,13 @@ async function analyzePass(){
       const a=await autoCalibrate(d);
       if(a&&S.analyzing){S.ppm=a;S.autoScale=true;updateScaleReadout();}
     }
-    // LONG CLIP: a full game can't be densely analyzed on a phone (ball tracking needs close frames).
-    // Above a threshold, analyze a dense ~WIN_SEC window anchored where the user SCRUBBED — they jump
-    // to a play and get it; short clips are unchanged (whole clip, winStart=0/winEnd=d).
-    const LONG_CLIP=75, WIN_SEC=42;
+    // Only GENUINELY long clips (3+ min) get windowed — a full game can't be densely analyzed on a
+    // phone. Normal clips (<=3 min) analyze the WHOLE thing (dynamic-paced), so the play is caught
+    // wherever it is — no scrubbing needed. Windowing a 1-2 min clip to 45s missed plays = "no stats".
+    const LONG_CLIP=180, WIN_SEC=45;
     let winStart=0,winEnd=d;
     if(d>LONG_CLIP){winStart=Math.max(0,Math.min(d-WIN_SEC,anchorT-6));winEnd=Math.min(d,winStart+WIN_SEC);
-      flash('Long clip ('+fmt(d)+') — analyzing ~'+WIN_SEC+'s from <span class="k">'+fmt(winStart)+'</span>. Scrub to another play and Analyze again.',5400);}
+      flash('Long clip ('+fmt(d)+') — analyzing the '+WIN_SEC+'s around <span class="k">'+fmt(winStart)+'</span>. Scrub to a play first, then Analyze (repeat for each play).',6000);}
     // DYNAMIC time-paced sampling: after each frame, stretch the step so the REST of the clip
     // fits the remaining frame + wall-clock budget. The clip END is always reached — dense on a
     // fast device, coarser on a slow one — instead of truncating the tail at a hard cap.
