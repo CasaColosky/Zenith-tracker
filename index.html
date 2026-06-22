@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260622s · Make Reel always (re)starts + stale-reel reset + never-silent errors (film still + name/number) -->
+<!-- Z-BUILD: stabilize-20260622a · honest load/analyze/reel flow + diagnostics + clip trust gate -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -114,9 +114,21 @@
   .bd-narr-lbl{display:block;font-size:8px;letter-spacing:.24em;color:var(--accent);text-transform:uppercase;margin-bottom:4px}
   .bd-narr p{font-family:var(--sans);font-size:11.5px;line-height:1.55;color:var(--ink)}
   .bd-narr p.muted{color:var(--dim);font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase}
+  .diag{position:absolute;left:14px;top:244px;z-index:6;width:188px;background:var(--panel);
+    backdrop-filter:blur(6px);border:1px solid rgba(25,224,255,.28);border-radius:4px;padding:9px;
+    font-family:var(--mono);font-size:9px;color:var(--dim);pointer-events:none}
+  .diag h4{font-size:8px;letter-spacing:.22em;color:var(--accent2);text-transform:uppercase;margin-bottom:6px}
+  .diag-row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;border-top:1px solid rgba(255,255,255,.07);padding:4px 0}
+  .diag-row:first-of-type{border-top:0}
+  .diag-row span{text-transform:uppercase;letter-spacing:.14em}
+  .diag-row b{max-width:96px;text-align:right;color:var(--ink);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .diag-row.good b{color:var(--accent)}
+  .diag-row.warn b{color:var(--warn)}
+  .diag-row.info b{color:var(--accent2)}
   .shbtn{width:100%;margin-top:9px;font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;
     background:var(--accent);color:#08130a;border:0;border-radius:3px;padding:9px;cursor:pointer;font-weight:700}
   .shbtn:active{transform:scale(.97)}
+  .shbtn:disabled{cursor:not-allowed;background:rgba(255,255,255,.12);color:var(--dim);border:1px solid rgba(255,255,255,.14)}
   .shbtn.alt{background:transparent;color:var(--accent2);border:1px solid var(--accent2)}
   .pcbtns{display:flex;gap:8px;margin-top:9px}.pcbtns .shbtn{margin-top:0}
   .moments{margin-top:8px;display:flex;flex-direction:column;gap:5px;max-height:118px;overflow:auto}
@@ -218,7 +230,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-s</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">stabilize-a</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -243,6 +255,10 @@
   </div>
 
   <div class="plays" id="playsPanel"><h4>Play Log</h4><div id="playList" class="empty">No plays yet</div></div>
+  <div class="diag" id="diagPanel">
+    <h4>Diagnostics</h4>
+    <div id="diagRows"></div>
+  </div>
 
   <div class="summary" id="summaryCard">
     <h4>Clip Summary <span class="conf" id="sumConf"></span></h4>
@@ -376,6 +392,9 @@
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"
   integrity="sha384-7qLdgfEQyO9ZQi9ArRHigK+IBto4XPk468jAqc+fnsXaZIcMAhQeLwzggRK7aESl"
   crossorigin="anonymous"></script>
+<script src="./diagnostics.js"></script>
+<script src="./trust.js"></script>
+<script src="./smoke.js"></script>
 <script>
 let video=document.getElementById('cam'); // 'let' so the multi-clip reel can src-swap the single element
 const cv=document.getElementById('view');
@@ -391,11 +410,12 @@ const AW=640; let AH=360;
 let DPR=Math.min(window.devicePixelRatio||1,2);
 let CW=0,CH=0, cover={dx:0,dy:0,dw:0,dh:0};
 let model=null;
+let modelPromise=null;
 
 const S={
   running:false, mode:'player', conf:0.42,
   source:'camera', fileURL:null,
-  analyzing:false, analyzePct:0, scrubbing:false,
+  analyzing:false, analyzePct:0, scrubbing:false, modelState:'idle', loadError:'', trust:null,
   summary:null, speedSeries:[], fitSamples:[], maxPersons:0, personCounts:[], fileFps:30,
   target:null, lost:0, searching:false, dets:[],
   calStage:0, calPts:[], ppm:null, calMeters:null, calLabel:null, autoScale:false,
@@ -476,6 +496,77 @@ function computeCover(){
 }
 addEventListener('resize',resize);
 
+function setModelState(state,msg){
+  S.modelState=state;S.loadError=msg||'';
+  const b=document.getElementById('bAnalyze');
+  if(b){b.disabled=state!=='ready';b.textContent=state==='ready'?'▸ Analyze Clip':state==='error'?'Model unavailable':'Loading AI…';}
+  renderDiagnostics();
+}
+function withTimeout(promise,ms,label){
+  return Promise.race([
+    promise,
+    new Promise((_,rej)=>setTimeout(()=>rej(new Error(label||'timeout')),ms)),
+  ]);
+}
+function loadVisionModel(){
+  if(model){setModelState('ready');return Promise.resolve(model);}
+  if(modelPromise)return modelPromise;
+  setModelState('loading');
+  modelPromise=withTimeout(cocoSsd.load({base:'lite_mobilenet_v2'}),45000,'model timeout')
+    .then(m=>{model=m;setModelState('ready');return m;})
+    .catch(e=>{modelPromise=null;setModelState('error',(e&&e.message)||'model failed');throw e;});
+  return modelPromise;
+}
+function enterFileMode(){
+  document.getElementById('gate').style.display='none';
+  S.source='file';S.running=true;loadPlays();renderPlays();loadScale();
+  setSourceUI('file');bindTransport();setMode('FILE');
+  const bA=document.getElementById('bAnalyze');if(bA)bA.classList.add('pulse');
+  flash('Clip loaded. AI model is '+(model?'ready':'loading')+'.\nTap <span class="k">▸ Analyze Clip</span> when it turns green.',4200);
+  requestAnimationFrame(loop);detectLoop();
+  renderDiagnostics();
+}
+function renderDiagnostics(){
+  const target=document.getElementById('diagRows');
+  if(!window.ZenithDiagnostics||!target)return;
+  const d=clipDuration ? clipDuration() : 0;
+  const trust=S.trust;
+  window.ZenithDiagnostics.render(target,[
+    ['build',document.getElementById('ver')?.textContent||'—','info'],
+    ['source',S.source||'—',S.source==='file'?'info':''],
+    ['model',S.modelState||'idle',S.modelState==='ready'?'good':S.modelState==='error'?'warn':'info'],
+    ['video',video.videoWidth?(video.videoWidth+'x'+video.videoHeight):'not loaded',video.videoWidth?'good':''],
+    ['duration',d?fmt(d):'—',''],
+    ['frames',S.cov&&S.cov.frames,''],
+    ['players',(S.players&&S.players.length)||0,''],
+    ['ball',S.ballTrack&&S.ballTrack.length,''],
+    ['field',S.fieldFrames?(Math.round((S.fieldHits/S.fieldFrames)*100)+'%'):'—',S.fieldFrames&&S.fieldHits/S.fieldFrames>=0.18?'good':'warn'],
+    ['trust',trust?trust.label:'not analyzed',trust&&trust.valid?'good':trust?'warn':''],
+  ]);
+}
+function assessClipTrust(frames,covered,duration){
+  const medianPlayers=median(S.personCounts||[]);
+  const trust=window.ZenithTrust?window.ZenithTrust.assess({
+    frames,
+    medianPlayers,
+    trackedPlayers:(S.players&&S.players.length)||0,
+    ballFrames:(S.ballTrack&&S.ballTrack.length)||0,
+    fieldFrames:S.fieldFrames||0,
+    fieldHits:S.fieldHits||0,
+    duration,
+    covered,
+  }):{valid:true,label:'ESTIMATED',score:0.5,reasons:[]};
+  S.trust=trust;
+  if(S.summary&&!trust.valid){
+    S.summary.quality={score:Math.min(S.summary.quality?.score||0,0.24),label:'LOW',reasons:trust.reasons||[]};
+  }
+  renderDiagnostics();
+  return trust;
+}
+function resetTrustTelemetry(){
+  S.trust=null;S.fieldActive=false;S.fieldFrames=0;S.fieldHits=0;S.cov=null;
+}
+
 /* ============================ CAMERA BOOT (unchanged path) ============================ */
 document.getElementById('startBtn').onclick=boot;
 async function boot(){
@@ -488,7 +579,7 @@ async function boot(){
     await new Promise(r=>{video.videoWidth?r():video.onloadedmetadata=r;});
     resize();
     st.innerHTML='<span class="spin"></span>Loading vision model… (first load downloads ~6MB)';
-    model=model||await cocoSsd.load({base:'lite_mobilenet_v2'});
+    await loadVisionModel();
     document.getElementById('gate').style.display='none';
     S.source='camera';S.running=true;loadPlays();renderPlays();loadScale();setSourceUI('camera');
     flash('Tap a detected <span class="k">'+(S.mode==='ball'?'ball':'player')+'</span> to lock on',2800);
@@ -505,6 +596,7 @@ async function bootFile(file){
   const btn=document.getElementById('startBtn'),st=document.getElementById('gateStatus'),er=document.getElementById('gateErr');
   er.textContent='';btn.disabled=true;document.getElementById('loadBtn').style.pointerEvents='none';
   try{
+    resetTrustTelemetry();
     revokeURL();
     S.fileURL=URL.createObjectURL(file);
     video.srcObject=null;video.loop=false;video.muted=true;video.src=S.fileURL;
@@ -522,14 +614,11 @@ async function bootFile(file){
     video.pause();
     S.clipDur=await ensureDuration();try{video.currentTime=0;}catch(e){}
     resize();
-    if(!model){st.innerHTML='<span class="spin"></span>Loading vision model… (first load downloads ~6MB)';
-      model=await cocoSsd.load({base:'lite_mobilenet_v2'});}
-    document.getElementById('gate').style.display='none';
-    S.source='file';S.running=true;loadPlays();renderPlays();loadScale();
-    setSourceUI('file');bindTransport();setMode('FILE');
-    const bA=document.getElementById('bAnalyze');if(bA)bA.classList.add('pulse'); // draw the eye to the real action
-    flash('Clip loaded — tap the big green <span class="k">▸ Analyze Clip</span> to find the highlights.\n(▶ just previews — it doesn’t analyze.)',4600);
-    requestAnimationFrame(loop);detectLoop();
+    enterFileMode();
+    st.innerHTML='<span class="spin"></span>Loading AI model…';
+    loadVisionModel()
+      .then(()=>flash('AI model ready — tap <span class="k">▸ Analyze Clip</span>.',2600))
+      .catch(e=>flash('AI model did not load. Check network/CDN, then try again.',3200));
   }catch(e){
     btn.disabled=false;document.getElementById('loadBtn').style.pointerEvents='';st.textContent='';
     const m=(e&&(e.message||e.name))||'';
@@ -1163,6 +1252,22 @@ function buildHighlights(playerId){
   for(const m of merged){m.dur=Math.max(0.1,m.end-m.start);const pk=ballPeakWithTime(m.start,m.end);m.peak=pk.peak;m.tPeak=pk.tPeak;}
   return merged;
 }
+function buildFilmSegments(playerId){
+  const tr=findTrackById(playerId);
+  if(!tr||!tr.samples||!tr.samples.length)return [];
+  const d=clipDuration()||1e9,PRE=0.45,POST=0.8,GAP=0.9,MIN=1.2;
+  const samples=tr.samples.slice().sort((a,b)=>a.t-b.t);
+  const groups=[];let cur=null;
+  for(const s of samples){
+    if(!cur||s.t-cur.last>GAP){cur={start:s.t,end:s.t,last:s.t};groups.push(cur);}
+    else{cur.end=s.t;cur.last=s.t;}
+  }
+  const segs=groups.map(g=>{
+    const start=Math.max(0,g.start-PRE),end=Math.min(d,Math.max(g.end+POST,g.start+MIN));
+    return {start,end,dur:Math.max(0.1,end-start),peak:0,tPeak:(start+end)/2,trackIds:[playerId],filmOnly:true};
+  }).filter(s=>s.end>s.start+0.2);
+  return segs;
+}
 /* ===== the AUTO-EDITOR: curate raw segments into a build-to-climax edit ===== */
 const REEL_STYLE={hype:{order:'climax',slowmo:true,minSeg:1.2},clean:{order:'chrono',slowmo:false,minSeg:1.6}};
 // Take raw {start,end,dur,peak,tPeak} segments → a curated, paced, climax-ordered selection (SAME shape,
@@ -1376,6 +1481,7 @@ function pickCommentaryVoice(){
   }catch(e){return null;}
 }
 function reelLine(){ // what the announcer says: the Claude recap if we have it, else an honest stat line
+  if(S.trust&&!S.trust.valid)return reelDisplayName()+' highlight reel. Stats are hidden because this clip was not trusted.';
   if(S._recap)return S._recap;
   const p=(S.players||[]).find(q=>q.id===S.selectedPlayer);
   if(!p)return '';
@@ -1396,7 +1502,10 @@ function startReel(playerId){
   if(S.reel.on){try{stopReelQuiet();}catch(e){}} // never let a stale/leftover reel block a fresh one
   if(playerId==null){flash('Tap your player on the video first',1800);return;}
   if(!S.trackArchive.length){flash('Analyze the clip first',1600);return;}
+  const filmOnly=S.trust&&!S.trust.valid;
+  if(filmOnly)flash('Making a film-only reel. Stats are hidden because this clip was not trusted.',2600);
   let raw=[];try{raw=buildHighlights(playerId)||[];}catch(e){raw=[];}
+  if(!raw.length&&filmOnly){try{raw=buildFilmSegments(playerId)||[];}catch(e){raw=[];}}
   if(!raw.length){flash('No touches for <span class="k">'+nameOf(playerId)+'</span> yet — film the play & Analyze again',2800);return;}
   let segs=raw; // CURATION MUST NEVER BLOCK THE REEL — on any failure, play the raw reel (the always-working path)
   try{const style=REEL_STYLE[S.reelStyle]||REEL_STYLE.hype;
@@ -1539,7 +1648,13 @@ function drawByTheNumbers(){ // closing card — honest stats only, '(est)' when
   ctx.fillStyle='#fff';ctx.fillText(nm,CW/2,CH*0.31);
   const p=(S.players||[]).find(q=>q.id===S.selectedPlayer),topSeg=r.segs.reduce((a,s)=>Math.max(a,s.peak||0),0);
   const est=(S.autoScale||!S.ppm)?' EST':'';
-  const rows=[
+  const untrusted=S.trust&&!S.trust.valid;
+  const rows=untrusted?[
+    ['STATUS','FILM ONLY'],
+    ['PLAYS',String(r.segs.length)],
+    ['STATS','HIDDEN'],
+    ['REASON',String(((S.trust.reasons||[])[0]||'not trusted')).slice(0,24).toUpperCase()]
+  ]:[
     ['TOP SPEED',(p&&S.ppm)?conv(p.topMs).toFixed(1)+' '+S.unit.toUpperCase()+est:(topSeg&&S.ppm?conv(topSeg).toFixed(0)+' '+S.unit.toUpperCase()+est:'—')],
     ['PLAYS',String(r.segs.length)],
     ['TOUCHES',p?String(p.touches):'—'],
@@ -1599,6 +1714,7 @@ function drawBroadcast(){
 }
 /* ===== save / share a result card as an image ===== */
 function shareData(kind){
+  if(S.trust&&!S.trust.valid)return null;
   if(kind==='player'){
     const p=(S.players||[]).find(q=>q.id===S.selectedPlayer);if(!p)return null;
     const team=(!S.teamsUnclear&&p.team!=='neutral')?teamLabelOf(p.id):'';
@@ -1693,7 +1809,7 @@ function renderHeroCard(d,bg){
   return c;
 }
 async function shareCard(kind){
-  const d=shareData(kind);if(!d){flash('Analyze a clip first',1600);return;}
+  const d=shareData(kind);if(!d){flash(S.trust&&!S.trust.valid?'Stats are not trusted for this clip. Try a centered lacrosse play.':'Analyze a clip first',2200);return;}
   let canvas;
   if(d.hero){flash('Building <span class="k">'+d.name+'</span>’s card…',1400);
     let bg=null;try{bg=await capturePlayerStill(S.selectedPlayer);}catch(e){}
@@ -1772,14 +1888,17 @@ function testEgoMotion(){ // pure self-test (no video/taps) for the ego-motion m
 }
 async function analyzePass(){
   if(S.analyzing)return;
-  if(!model){flash('Model still loading…',1500);return;}
+  if(!model){
+    flash('AI model is still loading…',1500);
+    try{await loadVisionModel();}catch(e){flash('AI model failed to load — check the connection and reload.',2600);return;}
+  }
   S.analyzing=true;
   const bA=document.getElementById('bAnalyze'),aP=document.getElementById('aprog');
   bA.classList.add('on');bA.classList.remove('pulse');aP.hidden=false;
   try{
     const keep=(S.mode==='player'&&S.target)?{...S.target}:null;
     resetTrajectory();if(keep)S.target=keep;
-    resetBallTracker();S.maxPersons=0;S.personCounts=[];S.speedSeries=[];S.breakdown=null;
+    resetBallTracker();resetTrustTelemetry();S.maxPersons=0;S.personCounts=[];S.speedSeries=[];S.breakdown=null;
     S.cameraMotion=[];S.egoUncorrected=0;egoPrevGray=null; // reset camera ego-motion accumulator
     document.getElementById('summaryCard').classList.remove('show');
     document.getElementById('breakdownCard').classList.remove('show');
@@ -1851,15 +1970,21 @@ async function analyzePass(){
     for(const tr of S.tracks)if(tr.confirmed&&S.trackArchive.length<60)S.trackArchive.push(tr);
     try{buildTeamModel();}catch(e){S.teamsUnclear=true;} // cluster tracks into 2 teams by jersey color
     if(S.analyzing){
-      buildSummary();buildBreakdown();
+      S.cov={dur:d,to:covered,frames};
+      buildSummary();
       try{buildPlayerStats();}catch(e){S.players=[];}
-      try{storeAnalyzedClip();}catch(e){} // add this clip to the multi-clip reel library
+      const trust=assessClipTrust(frames,covered,d);
+      renderSummary();
+      buildBreakdown();
+      if(trust.valid){try{storeAnalyzedClip();}catch(e){}} // add trusted clips to the multi-clip reel library
       S.selectedPlayer=null;renderPlayerList();
       try{video.currentTime=0;}catch(e){}
-      S.cov={dur:d,to:covered,frames};
       const np=(S.players&&S.players.length)||0;
       if(!np){ // honest: detector found no trackable players in this clip
         flash('✓ Analyzed, but <span class="k">no players tracked</span> here.\nFilm with the players a bit larger in frame (side-on), then Analyze again.',5200);
+      }else if(!trust.valid){
+        const why=(trust.reasons&&trust.reasons[0])||'not enough lacrosse evidence';
+        flash('✓ Analyzed, but stats are <span class="k">not trusted</span>.\n'+why+'. Use a centered lacrosse play, then Analyze again.',6200);
       }else{
         const spd=(S.ppm&&S.summary.peakMs>0&&!S.summary.scaleLikelyWrong)
           ?' · top speed <span class="k">'+conv(S.summary.peakMs).toFixed(0)+' '+S.unit.toUpperCase()+'</span>'+(S.autoScale?' (est)':''):'';
@@ -1881,6 +2006,7 @@ async function analyzePass(){
 function updateProgress(){
   document.getElementById('abarFill').style.width=(S.analyzePct*100|0)+'%';
   document.getElementById('apct').textContent=(S.analyzePct*100|0)+'%';
+  renderDiagnostics();
 }
 function buildSummary(){
   const ser=S.fitSamples.filter(v=>v>0.5);
@@ -1896,6 +2022,7 @@ function buildSummary(){
 }
 function computeQuality(peak){
   const reasons=[];
+  if(S.trust&&!S.trust.valid)reasons.push((S.trust.reasons&&S.trust.reasons[0])||'not enough lacrosse evidence');
   const cont=S.trackTotal?S.trackValid/S.trackTotal:0;if(cont<0.6)reasons.push('intermittent track');
   const nOk=S.fitSamples.length;if(nOk<8)reasons.push('few samples');
   let scaleScore=1;
@@ -1908,6 +2035,7 @@ function computeQuality(peak){
   let score=0.35*cont+0.2*Math.min(1,nOk/20)+0.3*scaleScore+0.15*(inBand?1:0.3);
   if(S.autoScale){score=Math.min(score,0.62);reasons.push('auto scale — approximate');}
   if(S.egoBad){score=Math.min(score,0.62);reasons.push('camera motion not corrected');}
+  if(S.trust&&!S.trust.valid)score=Math.min(score,0.24);
   if(!S.ppm)score=Math.min(score,0.3);
   const label=score>=0.66?'HIGH':score>=0.4?'MED':'LOW';
   return{score:+score.toFixed(2),label,reasons};
@@ -1915,14 +2043,16 @@ function computeQuality(peak){
 function renderSummary(){
   if(!S.summary)return;
   const s=S.summary,bad=s.scaleLikelyWrong,nocal=!s.calibrated;
-  document.getElementById('sumPeak').textContent=bad?'⚠':nocal?'—':conv(s.peakMs).toFixed(1);
-  document.getElementById('sumAvg').textContent=(bad||nocal)?'—':conv(s.avgMs).toFixed(1);
+  const invalid=S.trust&&!S.trust.valid;
+  document.getElementById('sumPeak').textContent=invalid?'—':bad?'⚠':nocal?'—':conv(s.peakMs).toFixed(1);
+  document.getElementById('sumAvg').textContent=(invalid||bad||nocal)?'—':conv(s.avgMs).toFixed(1);
   document.getElementById('sumDist').textContent=s.dist<10?s.dist.toFixed(1):Math.round(s.dist);
   document.getElementById('sumPlayers').textContent=s.players;
   const badge=document.getElementById('sumConf');
-  badge.textContent=nocal?'NO SCALE':bad?'CHECK SCALE':s.quality.label;
-  badge.className='conf '+((bad||nocal)?'low':s.quality.label.toLowerCase());
-  const baseNote=bad?'Reading exceeds a real lacrosse speed — re-tap Set Scale across a known distance.'
+  badge.textContent=invalid?'NO STAT':nocal?'NO SCALE':bad?'CHECK SCALE':s.quality.label;
+  badge.className='conf '+((invalid||bad||nocal)?'low':s.quality.label.toLowerCase());
+  const baseNote=invalid?'Not enough lacrosse evidence: '+(((S.trust&&S.trust.reasons)||[])[0]||'try a centered field play')+'.'
+    :bad?'Reading exceeds a real lacrosse speed — re-tap Set Scale across a known distance.'
     :nocal?'No scale set — tap Set Scale for real mph.'
     :(s.quality.reasons[0]||'speed over clip · 2D image-plane');
   const cov=S.cov?('analyzed '+fmt(S.cov.to)+' of '+fmt(S.cov.dur)+' · '+S.cov.frames+' frames'):'';
@@ -1948,6 +2078,7 @@ function narratorCfg(){
   let cfg={...NARR_DEFAULTS};
   try{const j=localStorage.getItem('zenith_narrator');if(j)cfg={...cfg,...JSON.parse(j)};}catch(e){}
   if(window.ZENITH_CFG&&typeof window.ZENITH_CFG==='object')cfg={...cfg,...window.ZENITH_CFG};
+  if(location.hostname==='localhost'||location.hostname==='127.0.0.1')cfg.provider='local';
   if(cfg.provider==='worker'&&!cfg.endpoint)cfg.provider='local';
   return cfg;
 }
@@ -1967,6 +2098,7 @@ async function narrate(b){
 }
 function narrateLocal(b){
   const e=b.events||{},parts=[];
+  if(b.meta&&b.meta.trusted===false)return 'Clip analyzed, but the app did not find enough lacrosse evidence to trust stats. Use a centered field play and analyze again.';
   try{
     if(e.faceoff)parts.push('The face-off went to Player '+e.faceoff.player+'.');
     if(e.possession&&e.possession.length)
@@ -1984,20 +2116,22 @@ function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'
 function buildBreakdown(){
   if(!S.summary)return;
   const s=S.summary,isBall=S.mode==='ball',u=unitLabel(),fmtV=ms=>+conv(ms).toFixed(1);
+  const trusted=!(S.trust&&!S.trust.valid);
   let pb={players:0,possession:[],passes:0,faceoff:null};
-  try{pb=buildPlayBreakdown();}catch(e){}
+  if(trusted)try{pb=buildPlayBreakdown();}catch(e){}
   // headline player count = robust per-frame median (s.players), NOT distinct track ids:
   // in a scrum COCO drops/re-finds players so track ids inflate (the "27 players" artifact).
   const ev={players:s.players||0};
-  if(!s.scaleLikelyWrong&&s.calibrated&&s.peakMs>0){
+  if(trusted&&!s.scaleLikelyWrong&&s.calibrated&&s.peakMs>0){
     if(isBall)ev.topBall={speed:fmtV(s.peakMs),unit:u};else ev.topSpeed={speed:fmtV(s.peakMs),unit:u};}
-  if(pb.faceoff)ev.faceoff=pb.faceoff;
-  if(pb.faceoffTeam)ev.faceoffTeam=pb.faceoffTeam;
-  if(pb.possession&&pb.possession.length)ev.possession=pb.possession;
-  if(pb.teamPossession)ev.teamPossession=pb.teamPossession;
-  if(typeof pb.passes==='number')ev.passes=pb.passes;
-  const meta={confidence:(s.scaleLikelyWrong||!s.calibrated)?'LOW':s.quality.label,calibrated:s.calibrated,scaleSuspect:s.scaleLikelyWrong,mode:S.mode};
+  if(trusted&&pb.faceoff)ev.faceoff=pb.faceoff;
+  if(trusted&&pb.faceoffTeam)ev.faceoffTeam=pb.faceoffTeam;
+  if(trusted&&pb.possession&&pb.possession.length)ev.possession=pb.possession;
+  if(trusted&&pb.teamPossession)ev.teamPossession=pb.teamPossession;
+  if(trusted&&typeof pb.passes==='number')ev.passes=pb.passes;
+  const meta={confidence:(!trusted||s.scaleLikelyWrong||!s.calibrated)?'LOW':s.quality.label,calibrated:s.calibrated,scaleSuspect:s.scaleLikelyWrong,mode:S.mode,trusted};
   const rows=[];
+  if(!trusted)rows.push({k:'Trust',v:'not enough lacrosse evidence',hot:true});
   if(ev.faceoffTeam)rows.push({k:'Face-off',v:ev.faceoffTeam,hot:true});
   else if(ev.faceoff)rows.push({k:'Face-off',v:'Player '+ev.faceoff.player,hot:true});
   if(ev.teamPossession)rows.push({k:'Possession',v:ev.teamPossession.map((t,i)=>'<em style="color:'+(i?'var(--teamB)':'var(--teamA)')+'">'+t.label+' '+t.pct+'%</em>').join(' · '),html:true});
@@ -2020,6 +2154,8 @@ function renderBreakdown(b){
   const np=document.getElementById('bdNarrText');np.className='muted';np.textContent='composing recap…';
   document.getElementById('summaryCard').classList.remove('show'); // richer breakdown replaces the bare summary
   document.getElementById('breakdownCard').classList.add('show');
+  const share=document.getElementById('bSharePlay');
+  if(share){share.disabled=b.meta.trusted===false;share.textContent=b.meta.trusted===false?'Stats not trusted':'Share ⤴';}
   const token=(S._narrToken=(S._narrToken||0)+1);
   narrate(b).then(text=>{if(token!==S._narrToken)return;np.className='';np.textContent=text;S._recap=text;})
     .catch(()=>{if(token!==S._narrToken)return;const t=narrateLocal(b);np.className='';np.textContent=t;S._recap=t;});
@@ -2171,7 +2307,7 @@ function bindTransport(){
 function newClip(){
   S.analyzing=false;video.pause();revokeURL();
   try{video.removeAttribute('src');video.load();}catch(e){}
-  resetTrajectory();resetBallTracker();S.speedSeries=[];S.summary=null;S.maxPersons=0;S.lost=0;
+  resetTrajectory();resetBallTracker();resetTrustTelemetry();S.speedSeries=[];S.summary=null;S.maxPersons=0;S.lost=0;
   if(S.autoScale){S.ppm=null;S.autoScale=false;}updateScaleReadout(); // re-auto-scale for the next clip
   S.breakdown=null;document.getElementById('breakdownCard').classList.remove('show');
   document.getElementById('summaryCard').classList.remove('show');
@@ -2401,18 +2537,35 @@ document.getElementById('bUnit').onclick=function(){
   renderPlayerList();if(S.selectedPlayer!=null)renderPlayerCard();
 };
 document.getElementById('bReset').onclick=()=>{
-  resetTrajectory();resetBallTracker();S.speedSeries=[];S.summary=null;S.breakdown=null;S.lost=0;
+  resetTrajectory();resetBallTracker();resetTrustTelemetry();S.speedSeries=[];S.summary=null;S.breakdown=null;S.lost=0;
   document.getElementById('summaryCard').classList.remove('show');
   document.getElementById('breakdownCard').classList.remove('show');
   hidePlayerUI();
   setMode(S.source==='file'?'FILE':'STANDBY');
   spd.textContent='0.0';peak.textContent='0.0';mx.textContent='0.0';dist.textContent='0';clk.textContent='0.0';
   flash('Reset',1000);
+  renderDiagnostics();
 };
 document.getElementById('sens').oninput=e=>{S.conf=e.target.value/100;};
 
 let ht;function flash(m,ms=1800){const h=document.getElementById('hint');h.innerHTML=m.replace(/\n/g,'<br>');h.classList.add('show');clearTimeout(ht);ht=setTimeout(()=>h.classList.remove('show'),ms);}
 const spd=document.getElementById('spd'),peak=document.getElementById('peak'),mx=document.getElementById('mx'),dist=document.getElementById('dist'),clk=document.getElementById('clk');
+window.ZenithApp={
+  snapshot(){
+    return {
+      build:document.getElementById('ver')?.textContent||'',
+      source:S.source,
+      running:S.running,
+      analyzing:S.analyzing,
+      modelState:S.modelState,
+      video:{readyState:video.readyState,width:video.videoWidth,height:video.videoHeight,duration:clipDuration()},
+      diagnostics:{frames:S.cov&&S.cov.frames,covered:S.cov&&S.cov.to,players:(S.players&&S.players.length)||0,ballFrames:(S.ballTrack&&S.ballTrack.length)||0,fieldFrames:S.fieldFrames,fieldHits:S.fieldHits,trust:S.trust},
+      summary:S.summary,
+      reel:{on:S.reel&&S.reel.on,segs:S.reel&&S.reel.segs&&S.reel.segs.length},
+    };
+  },
+};
+renderDiagnostics();
 </script>
 </body>
 </html>
