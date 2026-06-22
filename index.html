@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: bcast-hl-20260621n · long clips: analyze a dense ~42s window at the scrub point (short clips unchanged) (film still + name/number) -->
+<!-- Z-BUILD: bcast-hl-20260621o · AI commentary VOICE over the reel (Web Speech, reads the real stats) (film still + name/number) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -215,7 +215,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-n</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">hl-o</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -284,6 +284,8 @@
       <span class="ro" data-k="style" data-v="hype">Hype</span><span class="ro" data-k="style" data-v="clean">Clean</span>
       <span class="rosep"></span>
       <span class="ro" data-k="len" data-v="30">30s</span><span class="ro" data-k="len" data-v="60">60s</span>
+      <span class="rosep"></span>
+      <span class="ro" data-k="voice" data-v="1">🔊 Voice</span>
     </div>
     <div class="pcbtns">
       <button class="shbtn alt" id="bReel">▶ Make Reel</button>
@@ -402,6 +404,7 @@ const S={
   cameraMotion:[], egoUncorrected:0, curGray:null, egoBad:false,  // per-frame cumulative camera offset (ego-motion comp) + telemetry
   lib:{clips:[],activeId:null,cap:4}, multi:false, _libN:0, _lastName:'', _freeze:null, // multi-clip highlight reel library
   reelStyle:'hype', reelTarget:30, _markFlash:null,                // auto-editor: style preset + target length
+  reelVoice:true, _recap:'',                                       // AI commentary voice (Web Speech) + last recap text
   reel:{on:false,segs:[],i:0,playerId:null,intro:0,flash:0,flashV:0,recorder:null,stream:null,blob:null,chunks:null,name:'',wipeUntil:0,ctxId:null,swapping:false},// #40 highlight reel + video export + multi-clip state
   teams:{}, teamLabels:{}, teamsUnclear:true, teamConf:'LOW', teamFilter:'all',
   lastT:0, startT:0, maxV:0, distM:0, smoothV:0, unit:'mph',
@@ -1094,9 +1097,9 @@ function renderMoments(id){
 function renderReelOpts(){
   const el=document.getElementById('reelOpts');if(!el)return;
   el.querySelectorAll('.ro').forEach(c=>{
-    const on=(c.dataset.k==='style'&&c.dataset.v===S.reelStyle)||(c.dataset.k==='len'&&+c.dataset.v===S.reelTarget);
+    const on=(c.dataset.k==='style'&&c.dataset.v===S.reelStyle)||(c.dataset.k==='len'&&+c.dataset.v===S.reelTarget)||(c.dataset.k==='voice'&&S.reelVoice);
     c.classList.toggle('on',on);
-    c.onclick=()=>{if(c.dataset.k==='style')S.reelStyle=c.dataset.v;else S.reelTarget=+c.dataset.v;renderReelOpts();};
+    c.onclick=()=>{if(c.dataset.k==='style')S.reelStyle=c.dataset.v;else if(c.dataset.k==='len')S.reelTarget=+c.dataset.v;else if(c.dataset.k==='voice'){S.reelVoice=!S.reelVoice;if(!S.reelVoice)stopReelVoice();}renderReelOpts();};
   });
 }
 /* ===== #40 highlight reel + ESPN-style broadcast overlay (in-app; screen-record to save) ===== */
@@ -1273,7 +1276,7 @@ function buildReelFor(name){
   const sv=document.getElementById('bSaveVid');if(sv)sv.hidden=true;
   document.getElementById('playerCard').classList.remove('show');document.getElementById('playersPanel').classList.remove('show');document.getElementById('bPlayers').classList.remove('on');
   showReelBar();
-  const first=segs[0],go=()=>{activateClipContext(first.clipId);reelSeek(first.start);video.play().catch(()=>{});document.getElementById('bPlay').textContent='❚❚';startReelRecorder();};
+  const first=segs[0],go=()=>{activateClipContext(first.clipId);reelSeek(first.start);video.play().catch(()=>{});document.getElementById('bPlay').textContent='❚❚';startReelRecorder();speakReel();};
   if(S.fileURL===first.url&&video.readyState>=2)go(); // first clip already loaded
   else{ freezeCurrentFrame();S.reel.swapping=true;S.reel.wipeUntil=performance.now()+4000;
     loadClipThen(first.url,first.start,()=>{if(!S.reel.on)return;S.reel.swapping=false;S.reel.wipeUntil=performance.now()+150;go();}); }
@@ -1361,6 +1364,30 @@ function exportReelBlob(){
     flash(S.reel.hasAudio?'Saved highlight clip':'Saved — silent clip',1600);
   })();
 }
+/* ----- AI commentary VOICE over the reel (Web Speech; free, on-device; reads the real stats) ----- */
+function pickCommentaryVoice(){
+  try{const vs=(window.speechSynthesis&&speechSynthesis.getVoices())||[];
+    return vs.find(v=>/^en[-_]?US/i.test(v.lang)&&/(Google US English|Natural|Aaron|Fred|Daniel|Samantha|Nathan)/i.test(v.name))
+        ||vs.find(v=>/^en/i.test(v.lang)&&v.localService===false)||vs.find(v=>/^en/i.test(v.lang))||null;
+  }catch(e){return null;}
+}
+function reelLine(){ // what the announcer says: the Claude recap if we have it, else an honest stat line
+  if(S._recap)return S._recap;
+  const p=(S.players||[]).find(q=>q.id===S.selectedPlayer);
+  if(!p)return '';
+  const nm=nameOf(p.id),est=(S.autoScale||!S.ppm)?', estimated':'';
+  return nm+' on the highlight reel — '+(S.ppm?'top speed '+conv(p.topMs).toFixed(0)+' '+S.unit+est+', ':'')+p.touches+' touch'+(p.touches===1?'':'es')+', '+p.possSec.toFixed(0)+' seconds on the ball.';
+}
+function speakReel(){
+  if(!S.reelVoice||!('speechSynthesis' in window))return;
+  const text=reelLine();if(!text)return;
+  try{speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(text);u.rate=1.06;u.pitch=1.0;u.volume=1;
+    const v=pickCommentaryVoice();if(v)u.voice=v;
+    speechSynthesis.speak(u); // called inside the Make-Reel tap so iOS allows it
+  }catch(e){}
+}
+function stopReelVoice(){try{if('speechSynthesis' in window)speechSynthesis.cancel();}catch(e){}}
 function startReel(playerId){
   if(playerId==null){flash('Tap your player on the video first',1800);return;}
   if(!S.trackArchive.length){flash('Analyze the clip first',1600);return;}
@@ -1382,6 +1409,7 @@ function startReel(playerId){
   // play INSIDE the user gesture (iOS blocks deferred autoplay); the intro card just overlays
   video.play().catch(()=>{});document.getElementById('bPlay').textContent='❚❚';
   startReelRecorder(); // record the canvas (video + overlay) to a real file, if the browser supports it
+  speakReel(); // AI commentary voice — inside the tap gesture so iOS allows speechSynthesis
 }
 function playMoment(seg){ // play a single touch (no intro card — snappier; NOT recorded in v1)
   if(!seg)return;
@@ -1395,6 +1423,7 @@ function endReel(done){
   const pid=S.reel.playerId,wasRec=S.reel.recording;S.reel.on=false;S.reel.segs=[];S.reel.intro=0;S.reel.closing=false;
   try{video.playbackRate=1;}catch(e){} // never leave the element in slow-mo
   stopReelRecorder(done); // async: onstop reveals ⤓ Save or falls back to the screen-record tip
+  stopReelVoice();
   try{video.pause();}catch(e){}document.getElementById('bPlay').textContent='▶';
   hideReelBar();
   if(done){
@@ -1432,6 +1461,7 @@ function toggleReel(){if(S.reel.on)endReel(false);else startReel(S.selectedPlaye
 function stopReelQuiet(){ // teardown paths: kill the reel without flashing or re-rendering the card
   if(!S.reel.on){stopReelRecorder(false);return;}S.reel.on=false;S.reel.segs=[];S.reel.intro=0;S.reel.closing=false;
   stopReelRecorder(false); // mode-switch/new-clip/reset must not leak a running recorder + live tracks
+  stopReelVoice();
   try{video.pause();video.playbackRate=1;}catch(e){}hideReelBar();const b=document.getElementById('bPlay');if(b)b.textContent='▶';}
 /* ----- broadcast canvas overlay ----- */
 function roundRect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
@@ -1978,8 +2008,8 @@ function renderBreakdown(b){
   document.getElementById('summaryCard').classList.remove('show'); // richer breakdown replaces the bare summary
   document.getElementById('breakdownCard').classList.add('show');
   const token=(S._narrToken=(S._narrToken||0)+1);
-  narrate(b).then(text=>{if(token!==S._narrToken)return;np.className='';np.textContent=text;})
-    .catch(()=>{if(token!==S._narrToken)return;np.className='';np.textContent=narrateLocal(b);});
+  narrate(b).then(text=>{if(token!==S._narrToken)return;np.className='';np.textContent=text;S._recap=text;})
+    .catch(()=>{if(token!==S._narrToken)return;const t=narrateLocal(b);np.className='';np.textContent=t;S._recap=t;});
 }
 
 /* ----- motion-assisted ball tracking (file analysis only) ----- */
