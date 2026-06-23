@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: stabilize-20260622a · honest load/analyze/reel flow + diagnostics + clip trust gate -->
+<!-- Z-BUILD: coach-20260623a · single-file reconcile — stats-first, robust model load, layout fixed, ONE owner (no external js) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -46,7 +46,7 @@
   .mini{display:flex;gap:8px;flex-wrap:wrap}
   .mini .readout{min-width:0;padding:5px 10px}.mini .val{font-size:15px}
 
-  .dock{position:absolute;left:0;right:0;bottom:0;z-index:6;
+  .dock{position:absolute;left:0;right:0;bottom:0;z-index:6;max-width:600px;margin:0 auto;
     padding:12px 14px max(16px,env(safe-area-inset-bottom));
     background:linear-gradient(0deg,rgba(7,9,12,.93),rgba(7,9,12,0))}
   .row{display:flex;gap:8px;margin-top:8px}
@@ -153,7 +153,7 @@
     background:var(--warn);color:#fff;border:0;border-radius:20px;padding:6px 12px;cursor:pointer;font-weight:700}
   #reelBar #reelStop:active{transform:scale(.95)}
   .plays.players{width:190px}
-  .plays.reellib{width:190px;top:auto;bottom:118px}
+  .plays.reellib{width:170px;left:14px;right:auto;top:244px;bottom:auto}
   .reellib .rlrow{display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer;
     border-top:1px solid rgba(255,255,255,.08);padding:8px 0;font-size:10px;color:var(--dim)}
   .reellib .rlrow b{color:var(--ink);font-size:13px}
@@ -230,7 +230,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">stabilize-a</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">coach-1</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -255,10 +255,6 @@
   </div>
 
   <div class="plays" id="playsPanel"><h4>Play Log</h4><div id="playList" class="empty">No plays yet</div></div>
-  <div class="diag" id="diagPanel">
-    <h4>Diagnostics</h4>
-    <div id="diagRows"></div>
-  </div>
 
   <div class="summary" id="summaryCard">
     <h4>Clip Summary <span class="conf" id="sumConf"></span></h4>
@@ -392,9 +388,6 @@
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"
   integrity="sha384-7qLdgfEQyO9ZQi9ArRHigK+IBto4XPk468jAqc+fnsXaZIcMAhQeLwzggRK7aESl"
   crossorigin="anonymous"></script>
-<script src="./diagnostics.js"></script>
-<script src="./trust.js"></script>
-<script src="./smoke.js"></script>
 <script>
 let video=document.getElementById('cam'); // 'let' so the multi-clip reel can src-swap the single element
 const cv=document.getElementById('view');
