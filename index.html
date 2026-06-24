@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: coach-20260623b · audit fixes: landscape/short-screen reachable, panels scroll, model-load retry, recap no-refetch -->
+<!-- Z-BUILD: coach-20260624a · stats honesty: touches/possession show "—" when the ball wasn't detected; summary "On screen" vs roster "tracked" de-conflicted -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -249,7 +249,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">coach-2</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">coach-3</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -283,7 +283,7 @@
     </div>
     <div class="mini">
       <div class="readout"><div class="lbl">Dist m</div><span class="val" id="sumDist">0</span></div>
-      <div class="readout"><div class="lbl">Players</div><span class="val" id="sumPlayers">0</span></div>
+      <div class="readout"><div class="lbl">On screen</div><span class="val" id="sumPlayers">0</span></div>
     </div>
     <canvas id="spark" class="spark"></canvas>
     <div class="srange" id="sumNote">speed over clip · 2D image-plane</div>
@@ -1067,6 +1067,7 @@ function trackQuality(tr,m){
 function buildPlayerStats(){
   const players=S.trackArchive.filter(t=>t.confirmed&&t.samples&&t.samples.length>=CONFIRM_HITS);
   let intervals=[];try{intervals=(buildPlayBreakdown().intervals)||[];}catch(e){}
+  S.ballTracked=intervals.length>0; // touches/possession are KNOWN only if the possession logic produced an interval — else show "—", never a misleading 0
   const possBy={},touchBy={};
   for(const iv of intervals){possBy[iv.playerId]=(possBy[iv.playerId]||0)+(iv.tEnd-iv.tStart);touchBy[iv.playerId]=(touchBy[iv.playerId]||0)+1;}
   const ceil=CEIL.player,out=[];
@@ -1151,7 +1152,7 @@ function fmtPlayerRow(p){const sp=S.ppm?conv(p.topMs).toFixed(1)+' '+S.unit:'—
   return '<div class="pl row'+(p.id===S.selectedPlayer?' sel':'')+'" data-pid="'+p.id+'">'
     +'<span class="tbar" style="background:'+tc+'"></span>'
     +'<span><span class="tdot" style="background:'+tc+'"></span><b>'+nameOf(p.id)+'</b></span>'
-    +'<span class="pmeta">'+sp+'<br>'+p.touches+' touch · '+p.possSec.toFixed(1)+'s</span></div>';}
+    +'<span class="pmeta">'+sp+'<br>'+(S.ballTracked?p.touches+' touch · '+p.possSec.toFixed(1)+'s':'ball n/a')+'</span></div>';}
 function renderTeamLegend(){
   const el=document.getElementById('teamLegend');if(!el)return;
   if(S.teamsUnclear){el.innerHTML='';return;}
@@ -1176,9 +1177,9 @@ function renderPlayerCard(){
   nm.onclick=()=>namePlayer(p.id);
   document.getElementById('pcTop').textContent=S.ppm?conv(p.topMs).toFixed(1):'—';
   document.getElementById('pcTopU').textContent=unitLabel();
-  document.getElementById('pcTouch').textContent=p.touches;
+  document.getElementById('pcTouch').textContent=S.ballTracked?p.touches:'—';
   document.getElementById('pcDist').textContent=S.ppm?(p.distM<10?p.distM.toFixed(1):Math.round(p.distM)):'—';
-  document.getElementById('pcPoss').textContent=p.possSec.toFixed(1);
+  document.getElementById('pcPoss').textContent=S.ballTracked?p.possSec.toFixed(1):'—';
   document.getElementById('pcTime').textContent=p.screenSec.toFixed(1);
   const badge=document.getElementById('pcConf');badge.textContent=p.conf;badge.className='conf '+String(p.conf).toLowerCase();
   const td=document.getElementById('pcTeamDot'),tn=document.getElementById('pcTeam');
@@ -1195,7 +1196,7 @@ function renderMoments(id){
   const segs=buildHighlights(id);S._moCache=segs;
   const named=!!(S.playerNames&&S.playerNames[id]);
   renderReelOpts();
-  if(!segs.length){el.innerHTML='<div class="empty">No touches detected — try a longer clip</div>';if(rb){rb.disabled=true;rb.textContent='▶ Make Reel';}return;}
+  if(!segs.length){el.innerHTML='<div class="empty">'+(S.ballTracked?'No touches detected for this player — try a longer clip':'Ball not detected in this clip — touches and possession unavailable')+'</div>';if(rb){rb.disabled=true;rb.textContent='▶ Make Reel';}return;}
   if(rb){rb.disabled=false;rb.textContent='▶ Make '+(named?nameOf(id)+'’s':'')+' Reel';}
   el.innerHTML=segs.map((s,i)=>{
     const zap=(s.peak>0&&S.ppm)?' <span class="zap">⚡'+conv(s.peak).toFixed(0)+'</span>':'';
@@ -1673,8 +1674,8 @@ function drawByTheNumbers(){ // closing card — honest stats only, '(est)' when
   ]:[
     ['TOP SPEED',(p&&S.ppm)?conv(p.topMs).toFixed(1)+' '+S.unit.toUpperCase()+est:(topSeg&&S.ppm?conv(topSeg).toFixed(0)+' '+S.unit.toUpperCase()+est:'—')],
     ['PLAYS',String(r.segs.length)],
-    ['TOUCHES',p?String(p.touches):'—'],
-    ['POSSESSION',p?p.possSec.toFixed(1)+'s':'—']];
+    ['TOUCHES',(p&&S.ballTracked)?String(p.touches):'—'],
+    ['POSSESSION',(p&&S.ballTracked)?p.possSec.toFixed(1)+'s':'—']];
   let yy=CH*0.43;
   for(const [k,v] of rows){
     ctx.textAlign='left';ctx.fillStyle='#6b7780';ctx.font=`600 ${15*DPR}px ${FB}`;ctx.fillText(k,CW*0.18,yy);
@@ -1741,13 +1742,13 @@ function shareData(kind){
       conf:p.conf, estimated:est,
       tiles:[
         ['Top '+S.unit.toUpperCase(), S.ppm?conv(p.topMs).toFixed(1):'—'],
-        ['Touches', String(p.touches)],
-        ['Poss s', p.possSec.toFixed(1)]],
+        ['Touches', S.ballTracked?String(p.touches):'—'],
+        ['Poss s', S.ballTracked?p.possSec.toFixed(1):'—']],
       title:nm+(team?' · '+team:''),conf2:p.conf,recap:'',rows:[
         ['Top speed', S.ppm?conv(p.topMs).toFixed(1)+' '+S.unit.toUpperCase()+(est?' (est)':''):'—'],
         ['Distance', S.ppm?((p.distM<10?p.distM.toFixed(1):Math.round(p.distM))+' m'):'—'],
-        ['Possession', p.possSec.toFixed(1)+' s'],
-        ['Touches', String(p.touches)],
+        ['Possession', S.ballTracked?p.possSec.toFixed(1)+' s':'—'],
+        ['Touches', S.ballTracked?String(p.touches):'—'],
         ['Time on screen', p.screenSec.toFixed(1)+' s']]};
   }
   if(!S.breakdown)return null;
