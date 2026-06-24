@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: coach-20260624a · stats honesty: touches/possession show "—" when the ball wasn't detected; summary "On screen" vs roster "tracked" de-conflicted -->
+<!-- Z-BUILD: coach-20260624b · Make Reel ALWAYS builds — falls back to the player's on-screen footage when no touches are detected (button no longer disabled) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -249,7 +249,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">coach-3</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">coach-4</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -1196,7 +1196,7 @@ function renderMoments(id){
   const segs=buildHighlights(id);S._moCache=segs;
   const named=!!(S.playerNames&&S.playerNames[id]);
   renderReelOpts();
-  if(!segs.length){el.innerHTML='<div class="empty">'+(S.ballTracked?'No touches detected for this player — try a longer clip':'Ball not detected in this clip — touches and possession unavailable')+'</div>';if(rb){rb.disabled=true;rb.textContent='▶ Make Reel';}return;}
+  if(!segs.length){el.innerHTML='<div class="empty">'+(S.ballTracked?'No clear touches — Make Reel will use '+nameOf(id)+'’s on-screen footage':'Ball not detected — Make Reel will use '+nameOf(id)+'’s on-screen footage')+'</div>';if(rb){rb.disabled=false;rb.textContent='▶ Make '+(named?nameOf(id)+'’s':'')+' Reel';}return;}
   if(rb){rb.disabled=false;rb.textContent='▶ Make '+(named?nameOf(id)+'’s':'')+' Reel';}
   el.innerHTML=segs.map((s,i)=>{
     const zap=(s.peak>0&&S.ppm)?' <span class="zap">⚡'+conv(s.peak).toFixed(0)+'</span>':'';
@@ -1391,7 +1391,10 @@ function startClipSwap(seg){ // multi-clip cut: hold last frame, swap src, then 
 }
 function buildReelFor(name){
   let raw=[];try{raw=aggSegments(name)||[];}catch(e){raw=[];}
-  if(!raw.length){flash('No saved highlights for <span class="k">'+name+'</span> yet',2400);return;}
+  if(!raw.length){ // no touch highlights across clips -> fall back to on-screen footage in the active clip
+    try{for(const p of (S.players||[]))if(nameOf(p.id)===name){const f=buildFilmSegments(p.id)||[];raw=raw.concat(f);}}catch(e){}
+  }
+  if(!raw.length){flash('No footage for <span class="k">'+name+'</span> yet — analyze a clip they’re in',2600);return;}
   let segs=raw;
   try{const style=REEL_STYLE[S.reelStyle]||REEL_STYLE.hype;
     const c=curateReel(raw,{targetSec:S.reelTarget,order:style.order,minSeg:style.minSeg,slowmo:style.slowmo,marks:[]});
@@ -1519,11 +1522,13 @@ function startReel(playerId){
   if(S.reel.on){try{stopReelQuiet();}catch(e){}} // never let a stale/leftover reel block a fresh one
   if(playerId==null){flash('Tap your player on the video first',1800);return;}
   if(!S.trackArchive.length){flash('Analyze the clip first',1600);return;}
-  const filmOnly=S.trust&&!S.trust.valid;
-  if(filmOnly)flash('Making a film-only reel. Stats are hidden because this clip was not trusted.',2600);
   let raw=[];try{raw=buildHighlights(playerId)||[];}catch(e){raw=[];}
-  if(!raw.length&&filmOnly){try{raw=buildFilmSegments(playerId)||[];}catch(e){raw=[];}}
-  if(!raw.length){flash('No touches for <span class="k">'+nameOf(playerId)+'</span> yet — film the play & Analyze again',2800);return;}
+  let filmOnly=false;
+  if(!raw.length){ // no touch/possession highlights -> fall back to the player's on-screen footage so the reel ALWAYS builds
+    filmOnly=true;try{raw=buildFilmSegments(playerId)||[];}catch(e){raw=[];}
+  }
+  if(!raw.length){flash('<span class="k">'+nameOf(playerId)+'</span> isn’t on screen enough to build a reel — tap them during a play, then Analyze again',3400);return;}
+  if(filmOnly)flash('Building <span class="k">'+nameOf(playerId)+'</span>’s reel from their on-screen time (no clear touches in this clip).',2400);
   let segs=raw; // CURATION MUST NEVER BLOCK THE REEL — on any failure, play the raw reel (the always-working path)
   try{const style=REEL_STYLE[S.reelStyle]||REEL_STYLE.hype;
     const c=curateReel(raw,{targetSec:S.reelTarget,order:style.order,minSeg:style.minSeg,slowmo:style.slowmo,marks:loadMoments(curClipId())});
