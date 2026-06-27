@@ -1,0 +1,12 @@
+[debug] [2026-06-22T21:10:15.361Z] ----------------------------------------------------------------------
+[debug] [2026-06-22T21:10:15.362Z] Command:       /opt/homebrew/Cellar/node/25.9.0_1/bin/node /Users/robertcolosly/.npm/_npx/ba4f1959e38407b5/node_modules/.bin/firebase use
+[debug] [2026-06-22T21:10:15.362Z] CLI Version:   15.22.1
+[debug] [2026-06-22T21:10:15.362Z] Platform:      darwin
+[debug] [2026-06-22T21:10:15.362Z] Node Version:  v25.9.0
+[debug] [2026-06-22T21:10:15.362Z] Detected Agent: codex_cli
+[debug] [2026-06-22T21:10:15.362Z] Time:          Mon Jun 22 2026 17:10:15 GMT-0400 (Eastern Daylight Time)
+[debug] [2026-06-22T21:10:15.362Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-06-22T21:10:15.431Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-06-22T21:10:15.431Z] > authorizing via signed-in user (robert.colosky@gmail.com)
+[info] levelup-app-a0b03
