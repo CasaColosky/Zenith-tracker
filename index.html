@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: coach-20260624b · Make Reel ALWAYS builds — falls back to the player's on-screen footage when no touches are detected (button no longer disabled) -->
+<!-- Z-BUILD: coach-20260628a · lacrosse-fluent recap (narrateLocal rewritten as an analyst: face-off->possession story, settled vs direct, speed framed in lacrosse terms; honest, no invented plays) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -249,7 +249,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">coach-4</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">coach-5</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -2118,21 +2118,38 @@ async function narrate(b){
   }
   return narrateLocal(b);
 }
-function narrateLocal(b){
-  const e=b.events||{},parts=[];
-  if(b.meta&&b.meta.trusted===false)return 'Clip analyzed, but the app did not find enough lacrosse evidence to trust stats. Use a centered field play and analyze again.';
-  try{
-    if(e.faceoff)parts.push('The face-off went to Player '+e.faceoff.player+'.');
-    if(e.possession&&e.possession.length)
-      parts.push(e.possession.slice(0,2).map(p=>'P'+p.player+' held it '+p.seconds.toFixed(1)+'s').join(' and ')+'.');
-    if(typeof e.passes==='number'&&e.passes>0)parts.push(e.passes+' pass'+(e.passes>1?'es':'')+' moved the ball.');
-    if(e.topBall&&e.topBall.speed>0)parts.push('Fastest ball clocked '+e.topBall.speed+' '+e.topBall.unit+'.');
-    if(typeof e.players==='number'&&e.players>0)parts.push(e.players+' player'+(e.players>1?'s':'')+' on screen.');
-  }catch(err){}
-  if(!parts.length)return 'Clip analyzed — not enough clean motion to break down a play yet.';
-  let s=parts.join(' ');
-  if(b.meta&&b.meta.confidence&&b.meta.confidence!=='HIGH')s+=' ('+(b.meta.confidence==='LOW'?'rough read':'approximate')+'.)';
-  return s;
+function narrateLocal(b){ // lacrosse-fluent recap: picks the story, real vocabulary, honest about what it can't see
+  const e=b.events||{},meta=b.meta||{};
+  if(meta.trusted===false)return 'Clip analyzed, but there isn’t enough clean lacrosse footage to break down — frame a centered field play and analyze again.';
+  const rough=!!(meta.confidence&&meta.confidence!=='HIGH'),lines=[];
+  const foTeam=e.faceoffTeam,foPlayer=e.faceoff&&e.faceoff.player;
+  let dom=null,domPct=null,battle=false;
+  if(e.teamPossession&&e.teamPossession.length){dom=e.teamPossession[0].label;domPct=e.teamPossession[0].pct;battle=(domPct!=null&&domPct<56);}
+  // lead with the face-off -> possession story (the lacrosse spine of a sequence)
+  if(foTeam){
+    if(dom===foTeam&&domPct!=null&&!battle)lines.push(foTeam+' won the face-off and turned it into a '+domPct+'% possession edge — dictating tempo.');
+    else if(dom&&domPct!=null&&!battle)lines.push(foTeam+' came up with the face-off, but '+dom+' settled in and controlled possession at '+domPct+'%.');
+    else lines.push(foTeam+' came up with the face-off in a back-and-forth fight for the ball.');
+  }else if(foPlayer){lines.push('Player '+foPlayer+' scooped the ground ball off the face-off.');
+  }else if(dom&&domPct!=null){lines.push(battle?'A back-and-forth battle — possession split nearly even.':dom+' controlled the run of play at '+domPct+'% possession.');}
+  // ball movement -> settled vs direct
+  if(typeof e.passes==='number'){
+    if(e.passes>=5)lines.push('Patient, settled offense — they worked it through '+e.passes+' passes before the look.');
+    else if(e.passes>=2)lines.push('The ball moved through '+e.passes+' passes into the chance.');
+    else if(e.passes===1)lines.push('A direct, quick-strike possession.');
+  }
+  // speed headline, framed in lacrosse terms
+  const spd=e.topBall||e.topSpeed;
+  if(spd&&spd.speed>0){
+    if(e.topBall)lines.push('Hardest shot off the stick clocked '+spd.speed+' '+spd.unit+(rough?' (rough read)':'')+'.');
+    else lines.push('Top end on the field hit '+spd.speed+' '+spd.unit+(rough?' (rough read)':'')+' in transition.');
+  }
+  if(!lines.length){ // no clean game signal — say something true, never invent a play
+    if(spd&&spd.speed>0)return 'Open field — top speed '+spd.speed+' '+spd.unit+(rough?' (rough read)':'')+' getting up the field.';
+    if(typeof e.players==='number'&&e.players>0)return e.players+' on the field — no clean possession to break down here, but the motion’s there.';
+    return 'Clip analyzed — not a clean enough sequence to break down the play yet.';
+  }
+  return lines.slice(0,3).join(' ');
 }
 function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function buildBreakdown(){
