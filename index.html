@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: coach-20260628f · declutter markers — unselected players are a subtle foot ring (not a big box+label); only the selected kid is boxed+named; faint foot dots during the reel. (pro tracks + voice-inert from earlier) -->
+<!-- Z-BUILD: coach-20260628g · longer film reels: merge brief occlusions into continuous play (GAP 0.9->4, more padding) so the kid's reel isn't chopped short. + decluttered markers + pro tracks. (voice inert pending key) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -249,7 +249,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">coach-10</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">coach-11</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -1316,7 +1316,7 @@ function buildHighlights(playerId){
 function buildFilmSegments(playerId){
   const tr=findTrackById(playerId);
   if(!tr||!tr.samples||!tr.samples.length)return [];
-  const d=clipDuration()||1e9,PRE=0.45,POST=0.8,GAP=0.9,MIN=1.2;
+  const d=clipDuration()||1e9,PRE=1.2,POST=2.2,GAP=4.0,MIN=3.0; // generous: merge brief occlusions into continuous play, pad for context -> a longer, watchable film reel
   const samples=tr.samples.slice().sort((a,b)=>a.t-b.t);
   const groups=[];let cur=null;
   for(const s of samples){
