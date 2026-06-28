@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: coach-20260628e · PRO TRACKS: ⚡ Pro button ingests a YOLO+ByteTrack artifact (.json from the Mac pipeline) -> stable player tracking drives the reel/roster/markers/stats instead of in-browser COCO-SSD. Veo-ward step 1. (voice still inert pending key) -->
+<!-- Z-BUILD: coach-20260628f · declutter markers — unselected players are a subtle foot ring (not a big box+label); only the selected kid is boxed+named; faint foot dots during the reel. (pro tracks + voice-inert from earlier) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -249,7 +249,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">coach-9</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">coach-10</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -1149,21 +1149,24 @@ function buildPlayerMarkers(){
 function drawPlayers(){
   const ms=buildPlayerMarkers();if(!ms.length)return;
   const reel=S.reel.on;
-  ctx.save();ctx.font=`700 ${11*DPR}px ui-monospace,Menlo,monospace`;ctx.textBaseline='middle';
+  ctx.save();ctx.textBaseline='middle';ctx.setLineDash([]);
   const teamsOn=!S.teamsUnclear;
   for(const m of ms){
     const sel=m.sel;
-    if(reel&&sel)continue;                 // spotlight ring (drawBroadcast) is the highlight
+    if(reel&&sel)continue;                       // the spotlight ring (drawBroadcast) is the highlight
     const tc=teamsOn?teamCol(m.id):'#19e0ff';
-    const col=sel?'#c8ff32':(m.confirmed?tc:hexA(tc,.45));
-    const bw=Math.max(14*DPR,m.w),bh=Math.max(28*DPR,m.h),bx=m.x-bw/2,by=m.y-bh/2;
-    ctx.globalAlpha=reel?0.14:(sel?1:(m.confirmed?.85:.5));ctx.lineWidth=(sel?2.5:1.5)*DPR;ctx.strokeStyle=col;
-    ctx.setLineDash(sel?[]:[5*DPR,4*DPR]);ctx.strokeRect(bx,by,bw,bh);ctx.setLineDash([]);
-    if(!reel){
-      const lab=nameOf(m.id)+(teamsOn&&teamOf(m.id)!=='neutral'?' '+TEAM[teamOf(m.id)].tag:''),tw=ctx.measureText(lab).width+8*DPR;
-      ctx.fillStyle='rgba(7,9,12,.78)';ctx.fillRect(bx,by-15*DPR,tw,14*DPR);
-      ctx.fillStyle=sel?'#c8ff32':tc;ctx.fillText(lab,bx+4*DPR,by-8*DPR);
-      ctx.beginPath();ctx.arc(m.x,m.y,(sel?3.5:2.2)*DPR,0,7);ctx.fillStyle=col;ctx.fill();
+    const fy=m.y+Math.max(20*DPR,m.h)/2;         // ground at the player's feet
+    if(reel){                                    // others during the reel: barely-there foot dots
+      ctx.globalAlpha=0.12;ctx.fillStyle=tc;ctx.beginPath();ctx.ellipse(m.x,fy,7*DPR,3*DPR,0,0,7);ctx.fill();ctx.globalAlpha=1;continue;
+    }
+    if(sel){                                     // your selected kid: a clear box + name
+      const bw=Math.max(14*DPR,m.w),bh=Math.max(28*DPR,m.h),bx=m.x-bw/2,by=m.y-bh/2;
+      ctx.globalAlpha=1;ctx.lineWidth=2.6*DPR;ctx.strokeStyle='#c8ff32';ctx.strokeRect(bx,by,bw,bh);
+      const lab=nameOf(m.id);ctx.font=`800 ${12*DPR}px ui-monospace,Menlo,monospace`;const tw=ctx.measureText(lab).width+10*DPR;
+      ctx.fillStyle='#c8ff32';ctx.fillRect(bx,by-18*DPR,tw,17*DPR);ctx.fillStyle='#06120a';ctx.fillText(lab,bx+5*DPR,by-9*DPR);
+    }else{                                       // everyone else: a subtle foot ring — no boxes, no labels (declutters dense tracking)
+      ctx.globalAlpha=0.82;ctx.lineWidth=2*DPR;ctx.strokeStyle=tc;
+      ctx.beginPath();ctx.ellipse(m.x,fy,8*DPR,3.2*DPR,0,0,7);ctx.stroke();
     }
   }
   ctx.globalAlpha=1;ctx.restore();
