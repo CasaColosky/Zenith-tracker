@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: coach-20260628d · marked moments GUARANTEE a reel clip (double-tap a goal the CV missed -> it's locked into the reel, ±~2.5s); discoverable prompt after analyze. (voice wiring from coach-7 included, still inert pending key) -->
+<!-- Z-BUILD: coach-20260628e · PRO TRACKS: ⚡ Pro button ingests a YOLO+ByteTrack artifact (.json from the Mac pipeline) -> stable player tracking drives the reel/roster/markers/stats instead of in-browser COCO-SSD. Veo-ward step 1. (voice still inert pending key) -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -249,7 +249,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">coach-8</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">coach-9</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -356,8 +356,10 @@
       <button class="btn go analyze" id="bAnalyze">▸ Analyze Clip</button>
       <div class="row">
         <button class="btn" id="bCalF">Set Scale</button>
+        <button class="btn" id="bProTracks" title="Load YOLO pro tracks (.json) for this clip">⚡ Pro</button>
         <button class="btn warn" id="bNewClip">New Clip</button>
       </div>
+      <input type="file" id="proIn" accept=".json,application/json" hidden>
       <div class="transport">
         <button class="btn" id="bPlay" title="Preview/scrub (does not analyze)" style="flex:0 0 58px">▶</button>
         <input type="range" id="scrub" min="0" max="1000" value="0" step="1">
@@ -1089,6 +1091,45 @@ function buildPlayerStats(){
   out.sort((a,b)=>S.ppm?(b.topMs-a.topMs):(b.screenSec-a.screenSec));
   S.players=out;return out;
 }
+// ===== PRO TRACKS: ingest a YOLO+ByteTrack artifact (from the Mac pipeline) — stable tracking, no in-browser detect =====
+// Artifact tracks are normalized full-frame (cx,cy,w,h); convert through `cover` to the app's display-pixel space so
+// markers / spotlight ring / speed / reel all run unchanged on YOLO's tracks.
+function loadProTracks(art){
+  if(!art||typeof art!=='object'||!art.tracks){flash('That doesn’t look like a tracks file',2400);return;}
+  if(!video.videoWidth){flash('Load the clip first, then ⚡ Pro tracks for it',2800);return;}
+  try{
+    computeCover();
+    S.trackArchive=[];S.tracks=[];S.players=[];S.nextTrackId=1;S.ballTrack=[];S.ball=null;
+    const heights=[],counts={};
+    for(const tid in art.tracks){
+      const arr=art.tracks[tid];if(!arr||arr.length<8||arr[0].cls!==0)continue; // persons only; skip pure <8-frame fragments (ball parked)
+      const samples=arr.map(s=>({t:+s.t,x:cover.dx+s.x*cover.dw,y:cover.dy+s.y*cover.dh,w:s.w*cover.dw,h:s.h*cover.dh}));
+      for(const s of samples){if(s.h>0)heights.push(s.h);const k=Math.round(s.t*4);counts[k]=(counts[k]||0)+1;}
+      const last=samples[samples.length-1];
+      S.trackArchive.push({id:(parseInt(tid,10)||S.nextTrackId++),x:last.x,y:last.y,w:last.w,h:last.h,vx:0,vy:0,desc:null,
+        samples,lastSeen:last.t,hits:samples.length,age:samples.length,coast:0,confirmed:samples.length>=CONFIRM_HITS});
+    }
+    heights.sort((a,b)=>a-b);
+    const medH=heights.length?heights[heights.length>>1]:0;
+    if(medH>0){S.ppm=medH/1.7;S.autoScale=true;} // ~1.7m player → approximate mph; Set Scale across a known distance for exact
+    S.teamsUnclear=true;S.teams={};S.teamLabels={};S.ballTracked=false; // no jersey colors / ball in the artifact
+    S.personCounts=Object.values(counts);S.maxPersons=S.personCounts.length?Math.max.apply(null,S.personCounts):0;
+    try{buildPlayerStats();}catch(e){S.players=[];}
+    try{buildSummary();}catch(e){}
+    const d=(clipDuration&&clipDuration())||0;S.cov={dur:d,to:d,frames:art.frames||0};
+    S.selectedPlayer=null;S.showPlayers=true;
+    try{renderPlayerList();}catch(e){}
+    try{document.getElementById('playersPanel').classList.add('show');}catch(e){}
+    try{document.getElementById('bAnalyze').classList.remove('pulse');}catch(e){}
+    try{video.currentTime=0;}catch(e){}
+    try{updateScaleReadout();}catch(e){}
+    const np=(S.players&&S.players.length)||0;
+    flash('⚡ <span class="k">Pro tracking loaded</span> — '+np+' players, stable IDs.\n👆 Tap your kid → name → <span class="k">▶ Make Reel</span>'+(medH?'':'\nSet Scale for real mph'),6500);
+  }catch(e){flash('Pro tracks failed: '+((e&&e.message)||e),3400);}
+}
+document.getElementById('bProTracks').onclick=()=>document.getElementById('proIn').click();
+document.getElementById('proIn').onchange=function(e){const f=e.target.files&&e.target.files[0];if(!f)return;const r=new FileReader();
+  r.onload=()=>{let a=null;try{a=JSON.parse(r.result);}catch(err){flash('That file isn’t valid JSON',2400);return;}loadProTracks(a);};r.readAsText(f);e.target.value='';};
 function nearestBox(tr,t){const s=tr.samples;let best=s[0],bd=Math.abs(s[0].t-t);for(let i=1;i<s.length;i++){const dd=Math.abs(s[i].t-t);if(dd<bd){bd=dd;best=s[i];}}return{w:best.w,h:best.h};}
 let _mkCache={key:'',ms:[]};
 function buildPlayerMarkers(){
