@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: coach-20260628b · broadcast production pass: show-open title, unified brand+possession scorebug + LIVE counter, number-badge lower-third w/ SHOT chip, legibility scrims, structured By-the-Numbers card + sign-off -->
+<!-- Z-BUILD: coach-20260628c · ElevenLabs broadcast voice wired (Worker /tts route + client decodes TTS through _audioDest so it's BAKED INTO the reel export); inert until ELEVENLABS_API_KEY set + token injected -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -249,7 +249,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">coach-6</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">coach-7</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -1405,7 +1405,7 @@ function buildReelFor(name){
   const sv=document.getElementById('bSaveVid');if(sv)sv.hidden=true;
   document.getElementById('playerCard').classList.remove('show');document.getElementById('playersPanel').classList.remove('show');document.getElementById('bPlayers').classList.remove('on');
   showReelBar();
-  const first=segs[0],go=()=>{activateClipContext(first.clipId);reelSeek(first.start);video.play().catch(()=>{});document.getElementById('bPlay').textContent='❚❚';startReelRecorder();speakReel();};
+  const first=segs[0],go=()=>{activateClipContext(first.clipId);reelSeek(first.start);video.play().catch(()=>{});document.getElementById('bPlay').textContent='❚❚';startReelRecorder();speakReelVoice();};
   if(S.fileURL===first.url&&video.readyState>=2)go(); // first clip already loaded
   else{ freezeCurrentFrame();S.reel.swapping=true;S.reel.wipeUntil=performance.now()+4000;
     loadClipThen(first.url,first.start,()=>{if(!S.reel.on)return;S.reel.swapping=false;S.reel.wipeUntil=performance.now()+150;go();}); }
@@ -1517,7 +1517,34 @@ function speakReel(){
     speechSynthesis.speak(u); // called inside the Make-Reel tap so iOS allows it
   }catch(e){}
 }
-function stopReelVoice(){try{if('speechSynthesis' in window)speechSynthesis.cancel();}catch(e){}}
+function speakReelVoice(){ // prefer the ElevenLabs broadcast voice (baked into the export); else live Web Speech
+  if(!S.reelVoice)return;
+  const cfg=narratorCfg();
+  if(cfg.provider==='worker'&&cfg.endpoint&&cfg.token&&cfg.tts){speakReelTTS(cfg);return;}
+  speakReel();
+}
+async function speakReelTTS(cfg){ // fetch a real announcer voice and route it through the reel audio graph
+  const text=reelLine();if(!text)return;
+  try{
+    if(!_audioCtx)reelAudioTrack(); // ensure the graph exists (also resumed inside the start gesture)
+    if(_audioCtx&&_audioCtx.state==='suspended'){try{_audioCtx.resume();}catch(e){}}
+    const ctrl=new AbortController(),to=setTimeout(()=>ctrl.abort(),Math.max(9000,cfg.timeoutMs||0));
+    const res=await fetch(cfg.endpoint.replace(/\/$/,'')+'/tts',{method:'POST',signal:ctrl.signal,
+      headers:{'Content-Type':'application/json','X-Zenith-Token':cfg.token},
+      body:JSON.stringify(cfg.voice?{text,voice:cfg.voice}:{text})});
+    clearTimeout(to);
+    if(!res.ok)throw new Error('tts '+res.status);
+    const buf=await res.arrayBuffer();
+    if(!S.reel.on||!_audioCtx)return; // reel ended (or no audio graph) while fetching
+    const audio=await _audioCtx.decodeAudioData(buf);
+    try{S._ttsSrc&&S._ttsSrc.stop();}catch(e){}
+    const src=_audioCtx.createBufferSource();src.buffer=audio;
+    if(_audioDest)src.connect(_audioDest); // -> captured into the SAVED reel mp4
+    src.connect(_audioCtx.destination);     // -> audible while watching
+    src.start();S._ttsSrc=src;S.reel.hasVoice=true;
+  }catch(e){try{speakReel();}catch(_){}} // any failure (no key, offline, decode) -> live Web Speech
+}
+function stopReelVoice(){try{if('speechSynthesis' in window)speechSynthesis.cancel();}catch(e){}try{if(S._ttsSrc){S._ttsSrc.stop();S._ttsSrc=null;}}catch(e){}}
 function startReel(playerId){
   if(S.reel.on){try{stopReelQuiet();}catch(e){}} // never let a stale/leftover reel block a fresh one
   if(playerId==null){flash('Tap your player on the video first',1800);return;}
@@ -2121,7 +2148,7 @@ function drawSparkline(){
   x.lineWidth=2*DPR;x.strokeStyle='#c8ff32';x.stroke();
 }
 /* ===== play breakdown card + provider-agnostic narrator (free local default) ===== */
-const NARR_DEFAULTS={provider:'worker',endpoint:'https://zenith-narrator.robert-colosky.workers.dev',model:'claude-haiku-4-5-20251001',token:'',timeoutMs:8000};
+const NARR_DEFAULTS={provider:'worker',endpoint:'https://zenith-narrator.robert-colosky.workers.dev',model:'claude-haiku-4-5-20251001',token:'',timeoutMs:8000,tts:false,voice:''};
 // shared token is injected at deploy via window.ZENITH_CFG (kept OUT of source/git); empty here ⇒ falls back to local narration
 function narratorCfg(){
   let cfg={...NARR_DEFAULTS};
