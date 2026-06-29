@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Z-BUILD: coach-20260628g · longer film reels: merge brief occlusions into continuous play (GAP 0.9->4, more padding) so the kid's reel isn't chopped short. + decluttered markers + pro tracks. (voice inert pending key) -->
+<!-- Z-BUILD: coach-20260628h · VIRTUAL CAMERA: the reel smoothly crops-and-pans to keep your kid centered (auto-follow, the Veo look); snaps on cuts, eases like a cameraman; no boxes during the reel; spotlight ring mapped through the follow-cam. -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -153,6 +153,8 @@
   #reelBar #reelStop{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
     background:var(--warn);color:#fff;border:0;border-radius:20px;padding:6px 12px;cursor:pointer;font-weight:700}
   #reelBar #reelStop:active{transform:scale(.95)}
+  /* clean fullscreen during the reel — hide all app chrome so it reads as broadcast, not a tool */
+  body.reeling .hud,body.reeling .dock,body.reeling .topbar,body.reeling .plays,body.reeling .summary,body.reeling .breakdown{display:none!important}
   .plays.players{width:190px}
   .plays.reellib{width:170px;left:14px;right:auto;top:244px;bottom:auto}
   .reellib .rlrow{display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer;
@@ -249,7 +251,7 @@
   <div class="scan"></div>
 
   <div class="topbar">
-    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">coach-11</span></div>
+    <div class="brand">ZENITH<b>·</b>TRACKER <span class="ver" id="ver">coach-12</span></div>
     <div class="tags">
       <div class="mode" id="recTag" style="display:none">REC</div>
       <div class="mode" id="modeTag">STANDBY</div>
@@ -1472,8 +1474,8 @@ function clearReelLib(){
   S.lib.clips=[];S.lib.activeId=null;S.multi=false;renderReelLib();flash('Reel library cleared',1400);
 }
 function reelDisplayName(){return S.reel.name||nameOf(S.reel.playerId);}
-function showReelBar(){document.getElementById('reelTxt').textContent=reelDisplayName()+' · HIGHLIGHTS '+(S.reel.i+1)+'/'+S.reel.segs.length;document.getElementById('reelBar').classList.add('show');}
-function hideReelBar(){document.getElementById('reelBar').classList.remove('show');}
+function showReelBar(){document.getElementById('reelTxt').textContent=reelDisplayName()+' · HIGHLIGHTS '+(S.reel.i+1)+'/'+S.reel.segs.length;document.getElementById('reelBar').classList.add('show');document.body.classList.add('reeling');}
+function hideReelBar(){document.getElementById('reelBar').classList.remove('show');document.body.classList.remove('reeling');}
 function reelSeek(t){try{video.currentTime=Math.max(0,t);}catch(e){}S.lastT=0;}
 /* ----- save the reel as a real video: record the canvas (video + overlay) ----- */
 function canRecordReel(){
@@ -1824,14 +1826,12 @@ function drawBroadcast(){
     drawBug();ctx.restore();return;
   }
   bcastScrim(); // legibility frame over the live footage
-  const m=selectedMarker(); // spotlight ring on the kid's feet
-  if(m&&(video.playbackRate||1)>=1){ // ring off during the zoomed slow-mo (video is scaled, ring would misalign)
-    const ph=0.5+0.5*Math.sin(performance.now()/1000*4);
-    const fx=m.x,fy=m.y+Math.max(28*DPR,m.h)/2,rw=Math.max(22*DPR,m.w*0.95),rh=rw*0.32;
-    ctx.lineWidth=(2.4+ph*1.8)*DPR;ctx.strokeStyle=ringColOf(teamId);ctx.globalAlpha=0.6+0.32*ph;
-    ctx.beginPath();ctx.ellipse(fx,fy,rw,rh,0,0,7);ctx.stroke();
-    ctx.globalAlpha=0.9;ctx.fillStyle=ringColOf(teamId);ctx.beginPath();ctx.arc(m.x,m.y,3*DPR,0,7);ctx.fill();
-    ctx.globalAlpha=1;
+  const m=selectedMarker(),cam=r._cam; // subtle spotlight ring on the kid, MAPPED THROUGH the follow-camera so it stays on them
+  if(m&&cam){
+    const Z=cam.Z,tx=(m.x-cam.cx)*Z+CW/2,ty=(m.y-cam.cy)*Z+CH/2; // the kid's on-screen position after the virtual camera
+    const ph=0.5+0.5*Math.sin(performance.now()/1000*4),rw=Math.max(22*DPR,m.w*0.9*Z),rh=rw*0.30;
+    ctx.lineWidth=(2.2+ph*1.6)*DPR;ctx.strokeStyle=ringColOf(teamId);ctx.globalAlpha=0.45+0.28*ph;
+    ctx.beginPath();ctx.ellipse(tx,ty+Math.max(24*DPR,m.h*Z)/2,rw,rh,0,0,7);ctx.stroke();ctx.globalAlpha=1;
   }
   if((video.playbackRate||1)<1){ // SLO-MO REPLAY tag on the climax
     ctx.textAlign='center';ctx.textBaseline='middle';ctx.font=`800 ${15*DPR}px ${FB}`;
@@ -2479,13 +2479,20 @@ function loop(){
     advanceReel();
     if(S.reel.on&&performance.now()<S.reel.wipeUntil){if(S._freeze)ctx.drawImage(S._freeze,0,0);} // hold last frame during a clip-swap
     else if(video.readyState>=2){
-      const slow=S.reel.on&&(video.playbackRate||1)<1; // PUNCH-IN zoom on the slow-mo climax
-      if(slow){const m=selectedMarker(),zx=m?m.x:CW/2,zy=m?m.y:CH/2;
-        ctx.save();ctx.translate(zx,zy);ctx.scale(1.35,1.35);ctx.translate(-zx,-zy);
-        ctx.drawImage(video,cover.dx,cover.dy,cover.dw,cover.dh);ctx.restore();}
-      else ctx.drawImage(video,cover.dx,cover.dy,cover.dw,cover.dh);
+      const r=S.reel;
+      if(r.on){ // VIRTUAL CAMERA: a smooth crop-and-pan that keeps the selected kid centered (the Veo "follow" look)
+        const m=selectedMarker();
+        if(r.camX==null){r.camX=m?m.x:CW/2;r.camY=m?m.y:CH/2;}
+        if(m){ if(Math.hypot(m.x-r.camX,m.y-r.camY)>CW*0.45){r.camX=m.x;r.camY=m.y;} // snap on a cut/teleport
+               else{r.camX+=(m.x-r.camX)*0.10;r.camY+=(m.y-r.camY)*0.10;} }            // else ease in like a cameraman
+        const Z=(video.playbackRate||1)<1?1.95:1.6,hw=CW/(2*Z),hh=CH/(2*Z);
+        const cx=Math.max(hw,Math.min(CW-hw,r.camX)),cy=Math.max(hh,Math.min(CH-hh,r.camY));
+        r._cam={cx,cy,Z};
+        ctx.save();ctx.translate(CW/2,CH/2);ctx.scale(Z,Z);ctx.translate(-cx,-cy);
+        ctx.drawImage(video,cover.dx,cover.dy,cover.dw,cover.dh);ctx.restore();
+      } else ctx.drawImage(video,cover.dx,cover.dy,cover.dw,cover.dh);
     }
-    if(S.reel.on){if((video.playbackRate||1)>=1)drawPlayers();drawBroadcast();} // boxes off during the zoomed slow-mo
+    if(S.reel.on)drawBroadcast(); // the follow-camera IS the highlight — no per-player boxes during the reel
     else{
       if(S.showHeat)drawHeat();
       if(S.showTrail)drawTrail();
